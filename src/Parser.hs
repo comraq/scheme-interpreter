@@ -1,23 +1,24 @@
 module Parser (readExpr) where
 
-import Text.ParserCombinators.Parsec
-
-import Numeric (readHex, readOct, readInt, readFloat, readDec)
+import Control.Monad (void)
+import Control.Monad.Except
 import Data.Char (digitToInt)
 import Data.Maybe (maybeToList)
-import Control.Monad (void)
 import Data.Ratio
 import Data.Complex
+import Numeric (readHex, readOct, readInt, readFloat, readDec)
+import Text.ParserCombinators.Parsec
 
 import Definition
+import LispError
 
 
+------- The Public Parsing Function -------
 
-readExpr :: String -> LispVal
+readExpr :: String -> Except LispError LispVal
 readExpr input = case parse parseExpr "lisp" input of
-  Left err  -> LString $ "No match: " ++ show err
-  Right val -> val
-
+  Left err  -> throwError $ Parser err
+  Right val -> return val
 
 
 ------- Parsers -------
@@ -224,7 +225,7 @@ binChars = "01"
 readBin :: String -> [(Integer, String)]
 readBin = readInt 2 (`elem` binChars) digitToInt
 
-symbolChars :: [Char]
+symbolChars :: String
 symbolChars = "!$%&|*+/:<=?>@^_~-"
 
 symbol :: Parser Char

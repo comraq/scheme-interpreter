@@ -1,18 +1,21 @@
 module Main where
 
 import System.Environment
-import Parser (readExpr)
+
 import Evaluator (eval)
+import LispError
+import Parser (readExpr)
 
 ------ Entry Point (Main) -------
 
 main :: IO ()
-main = getArgs >>= print . eval . readExpr . head
+main = getArgs >>= putStrLn . evalInput . head
 
 mainI :: IO ()
-mainI = do
-  input <- getLine
-  print . eval . readExpr $ input
+mainI = getLine >>= putStrLn . evalInput
 
 mainI' :: String -> IO ()
-mainI' = print . eval . readExpr
+mainI' = putStrLn . evalInput
+
+evalInput :: String -> String
+evalInput = extractValue . trapError . fmap show . (eval =<<) . readExpr

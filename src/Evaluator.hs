@@ -1,22 +1,35 @@
 module Evaluator (eval) where
 
+import Control.Monad.Except
+
 import Definition
+import LispError
 import Parser
 
-eval :: LispVal -> LispVal
-eval val@(LList lvs) = case lvs of
-  [LAtom "quote",      vs] -> vs
-  (LAtom "quasiquote": vs) -> LList vs
-  (LAtom func : args)      -> apply func $ map eval args
-  _                        -> val
-eval val@_       = val
+eval :: LispVal -> Except LispError LispVal
+eval val@(LString _)       = return val
+eval val@(LNumber _)       = return val
+eval val@(LBool _)         = return val
+eval val@(LChar _)         = return val
+eval val@(LDottedList _ _) = return val
 
-apply :: String -> [LispVal] -> LispVal
-apply func args = maybe (LBool False) ($ args) $ lookup func primitives
+eval val@(LList lvs)       = case lvs of
+  [LAtom "quote",      vs] -> return vs
+  (LAtom "quasiquote": vs) -> return $ LList vs
+  (LAtom func : args)      -> mapM eval args >>= apply func
+  _                        -> return val
 
-primitives :: [(String, [LispVal] -> LispVal)]
+eval badForm               =
+  throwError $ BadSpecialForm "Unrecognized special form" badForm
+
+apply :: String -> [LispVal] -> Except LispError LispVal
+apply func args = maybe notFuncErr ($ args) $ lookup func primitives
+  where
+    notFuncErr :: Except LispError LispVal
+    notFuncErr = throwError $ NotFunction "Unrecognized primitive function args" func
+
+primitives :: [(String, [LispVal] -> Except LispError LispVal)]
 primitives = [
-
              -- Numeric Operations
                ("+",         numericBinop (+) )
              , ("-",         numericBinop (-) )
@@ -38,39 +51,35 @@ primitives = [
              ]
 
 numericBinop :: (SchemeNumber -> SchemeNumber -> SchemeNumber)
-             -> [LispVal] -> LispVal
-numericBinop op params = LNumber . foldl1 op $ map unpackNum params
+             -> [LispVal] -> Except LispError LispVal
+numericBinop op params = LNumber . foldl1 op <$> mapM unpackNum params
 
-unpackNum :: LispVal -> SchemeNumber
-unpackNum (LNumber n) = n
+unpackNum :: LispVal -> Except LispError SchemeNumber
+unpackNum (LNumber n) = return n
 unpackNum (LList [n]) = unpackNum n
 unpackNum (LString n) =
   let parsed = reads n
   in  if null parsed
-        then SInt 0
-        else SInt . fst $ head parsed
-unpackNum _ = SInt 0
+        then throwError $ TypeMismatch "number" $ LString n
+        else return . SInt . fst . head $ parsed
+unpackNum notNum      = throwError $ TypeMismatch "number" notNum
 
-{-
- - TODO: Return error values for the below (1-arity) functions
- -       if length of input args > 1
- -}
-isLString :: [LispVal] -> LispVal
-isLString (LString _:_) = LBool True
-isLString _             = LBool False
+isLString :: [LispVal] -> Except LispError LispVal
+isLString [LString _] = return $ LBool True
+isLString vals        = throwError $ NumArgs 1 vals
 
-isLNumber :: [LispVal] -> LispVal
-isLNumber (LNumber _:_) = LBool True
-isLNumber _             = LBool False
+isLNumber :: [LispVal] -> Except LispError LispVal
+isLNumber [LNumber _] = return $ LBool True
+isLNumber vals        = throwError $ NumArgs 1 vals
 
-isLAtom :: [LispVal] -> LispVal
-isLAtom (LAtom _:_) = LBool True
-isLAtom _           = LBool False
+isLAtom :: [LispVal] -> Except LispError LispVal
+isLAtom [LAtom _] = return $ LBool True
+isLAtom vals      = throwError $ NumArgs 1 vals
 
-atomToString :: [LispVal] -> LispVal
-atomToString (LAtom a:_) = LString a
-atomToString _           = LBool False
+atomToString :: [LispVal] -> Except LispError LispVal
+atomToString [LAtom a] = return $ LString a
+atomToString vals      = throwError $ NumArgs 1 vals
 
-stringToAtom :: [LispVal] -> LispVal
-stringToAtom (LString s:_) = LAtom s
-stringToAtom _             = LBool False
+stringToAtom :: [LispVal] -> Except LispError LispVal
+stringToAtom [LString s] = return $ LAtom s
+stringToAtom vals        = throwError $ NumArgs 1 vals

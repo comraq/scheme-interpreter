@@ -18,8 +18,10 @@ library
   exposed-modules:     Definition
                      , Parser
                      , Evaluator
+                     , LispError
   build-depends:       base >= 4.7 && < 5
                      , parsec
+                     , mtl
   default-language:    Haskell2010
 
 executable scheme-interpreter-exe
