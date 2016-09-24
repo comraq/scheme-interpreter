@@ -37,9 +37,11 @@ parseExpr = parseAtom
 
 parseAtom :: Parser LispVal
 parseAtom = do
-  first <- letter <|> satisfy (\c -> c /= '-' && c `elem` symbolChars)
+  first <- letter <|> minusSymbol <|> satisfy (\c -> c /= '-' && c `elem` symbolChars)
   rest  <- many $ letter <|> digit <|> symbol
   return . LAtom $ first : rest
+  where minusSymbol :: Parser Char
+        minusSymbol = char '-' <* notFollowedBy digit
 
 
 ------- Bool Parser -------
@@ -66,10 +68,7 @@ parseChar = try $ do
     delimiters = " ()"
 
     character :: Parser Char
-    character = do
-      chr <- anyChar
-      void (oneOf delimiters) <|> eof
-      return chr
+    character = anyChar <* lookAhead (void (oneOf delimiters) <|> eof)
 
     characterName :: Parser Char
     characterName = (string "space" <|> string "newline") >>= \chrName ->
@@ -103,7 +102,10 @@ validString = many1 (noneOf "\\\"") <|> escaped
 ------- Number Parsers -------
 
 parseNumber :: Parser LispVal
-parseNumber = LNumber <$> parseSNumber
+parseNumber = fmap LNumber (peekFirst >> parseSNumber <?> "Parse: Invalid LNumber")
+  where
+    peekFirst :: Parser ()
+    peekFirst = void . try . lookAhead $ digit <|> (char '-' >> digit)
 
 parseSNumber :: Parser SchemeNumber
 parseSNumber = tryRational <|> tryComplex <|> noBase <|> try withBase
@@ -190,13 +192,22 @@ parseQuasiQuoted :: Parser LispVal
 parseQuasiQuoted = between (string "`(") (char ')') quasiQuoted
   where
     quasiQuoted :: Parser LispVal
-    quasiQuoted = LList . (LAtom "quasiquote":) <$> ((unquoted <|> parseExpr) `sepBy` spaces1)
+    quasiQuoted = LList . (LAtom "quasiquote":)
+                  <$> ((unquoted <|> template) `sepBy` spaces1)
 
     unquoted :: Parser LispVal
-    unquoted = fmap (LList . (LAtom "unquoted":) . (:[]))
-                  $ char ',' >> parseExpr
+    unquoted = LList . (LAtom "unquoted":) <$> do
+                  char ','
+                  unpackList <|> fmap (:[]) parseExpr
 
+    unpackList :: Parser [LispVal]
+    unpackList = do
+      char '@'
+      (LList vals) <- between (char '(') (char ')') parseList
+      return $ LAtom "unpack":vals
 
+    template :: Parser LispVal
+    template = LAtom <$> many1 notSpace
 
 ------- List Parsers -------
 
@@ -207,7 +218,7 @@ parseAnyList = between (char '(') (char ')') anyList
     anyList = try parseList <|> parseDottedList
 
 parseList :: Parser LispVal
-parseList = LList <$> parseExpr `sepBy` spaces1
+parseList = LList <$> parseExpr `sepEndBy` spaces1
 
 parseDottedList :: Parser LispVal
 parseDottedList =
@@ -233,6 +244,9 @@ symbol =  oneOf symbolChars
 
 spaces1 :: Parser ()
 spaces1 =  skipMany1 space
+
+notSpace :: Parser Char
+notSpace = satisfy (/=' ')
 
 
 ------- Unused -------

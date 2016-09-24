@@ -30,6 +30,7 @@ instance Show LispVal where
 
 showVal :: LispVal -> String
 showVal (LString contents)      = "\"" ++ contents ++ "\""
+showVal (LChar c)               = [c]
 showVal (LAtom name)            = name
 showVal (LNumber contents)      = show contents
 showVal (LBool bool)            = showLBool bool
