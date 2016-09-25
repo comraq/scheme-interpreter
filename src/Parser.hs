@@ -102,6 +102,7 @@ validString = many1 (noneOf "\\\"") <|> escaped
 ------- Number Parsers -------
 
 parseNumber :: Parser LispVal
+-- parseNumber = LNumber <$> parseSNumber
 parseNumber = fmap LNumber (peekFirst >> parseSNumber <?> "Parse: Invalid LNumber")
   where
     peekFirst :: Parser ()
@@ -215,7 +216,7 @@ parseAnyList :: Parser LispVal
 parseAnyList = between (char '(') (char ')') anyList
   where
     anyList :: Parser LispVal
-    anyList = try parseList <|> parseDottedList
+    anyList = try parseDottedList <|> parseList
 
 parseList :: Parser LispVal
 parseList = LList <$> parseExpr `sepEndBy` spaces1
