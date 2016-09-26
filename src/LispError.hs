@@ -2,6 +2,7 @@
 
 module LispError
   ( LispError(..)
+  , Evaled
   , trapError
   , extractValue
   ) where
@@ -10,6 +11,8 @@ import Control.Monad.Except
 import Text.Parsec.Error
 
 import Definition
+
+type Evaled = Except LispError
 
 data LispError = NumArgs        Integer    [LispVal]
                | TypeMismatch   String     LispVal
@@ -41,5 +44,6 @@ unwordsList = unwords . map show
 trapError :: MonadError LispError m => m String -> m String
 trapError action = catchError action $ return . show
 
-extractValue :: Except LispError a -> a
+-- Undefined because 'extractValue' should never be called if error
+extractValue :: Evaled a -> a
 extractValue = either undefined id . runExcept

@@ -2,6 +2,7 @@ module LispFunction
   ( LFuncName
   , LFunction
   , lookupFunc
+  , eqv
   ) where
 
 import Control.Monad.Except
@@ -12,7 +13,7 @@ import LispError
 import Unpacker
 
 type LFuncName = String
-type LFunction = [LispVal] -> Except LispError LispVal
+type LFunction = [LispVal] -> Evaled LispVal
 
 lookupFunc :: LFuncName -> Maybe LFunction
 lookupFunc name = lookup name functionsMap
@@ -85,10 +86,10 @@ numericBinop :: (SchemeNumber -> SchemeNumber -> SchemeNumber)
              -> LFunction
 numericBinop op params = LNumber . foldl1 op <$> mapM unpackNum params
 
-boolBinop :: (LispVal -> Except LispError a)
+boolBinop :: (LispVal -> Evaled a)
           -> (a -> a -> Bool)
           -> [LispVal]
-          -> Except LispError LispVal
+          -> Evaled LispVal
 boolBinop unpacker op args = if length args /= 2
                                then throwError $ NumArgs 2 args
                                else do left  <- unpacker $ head args
@@ -203,7 +204,7 @@ makeString args = case args of
     [LNumber n, LChar c] -> mkStr (fromIntegral n, c)
     _                    -> throwError $ NumArgs 1 args
 
-  where mkStr :: (Int, Char) -> Except LispError LispVal
+  where mkStr :: (Int, Char) -> Evaled LispVal
         mkStr = return . LString . uncurry replicate
 
 stringLength :: LFunction
@@ -236,7 +237,7 @@ stringToList args        = throwError $ InvalidArgs "Expected string" args
 
 listToString :: LFunction
 listToString [LList lispvals] = LString <$> toString lispvals
-  where toString :: [LispVal] -> Except LispError String
+  where toString :: [LispVal] -> Evaled String
         toString []            = return ""
         toString (LChar c:lvs) = (c:) <$> toString lvs
         toString args          = throwError $ InvalidArgs "Expected a char list" args
