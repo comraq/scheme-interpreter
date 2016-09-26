@@ -25,13 +25,17 @@ unpackNum (LString n) =
         else return . SInt . fst . head $ parsed
 unpackNum notNum      = throwError $ TypeMismatch "number" notNum
 
-unpackStr :: LispVal -> Except LispError String
-unpackStr (LString s) = return s
-unpackStr (LNumber n) = return $ show n
-unpackStr (LBool   b) = return $ show b
-unpackStr (LChar   c) = return $ show c
-unpackStr notString   = throwError $ TypeMismatch "string" notString
+unpackStr :: (String -> String) -> LispVal -> Except LispError String
+unpackStr f (LString s) = return $ f s
+unpackStr f (LNumber n) = return . f $ show n
+unpackStr f (LBool   b) = return . f $ show b
+unpackStr f (LChar   c) = return . f $ show c
+unpackStr _ notString   = throwError $ TypeMismatch "string" notString
 
 unpackBool :: LispVal -> Except LispError Bool
 unpackBool (LBool b) = return b
 unpackBool notBool   = throwError $ TypeMismatch "boolean" notBool
+
+unpackBoolCoerce :: LispVal -> Bool
+unpackBoolCoerce (LBool False) = False
+unpackBoolCoerce _             = True

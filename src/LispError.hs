@@ -17,6 +17,7 @@ data LispError = NumArgs        Integer    [LispVal]
                | BadSpecialForm String     LispVal
                | NotFunction    String     String
                | UnboundVar     String     String
+               | InvalidArgs    String     [LispVal]
                | Default        String
 
 instance Show LispError where
@@ -32,6 +33,7 @@ showError (TypeMismatch   expected found)   =
   "Invalid type: expected " ++ expected ++ ", found " ++ show found
 showError (Parser         parseErr)         =
   "Parse error at " ++ show parseErr
+showError (InvalidArgs    message  args)    = message ++ ", got :" ++ show args
 
 unwordsList :: [LispVal] -> String
 unwordsList = unwords . map show

@@ -1,10 +1,11 @@
 module LispFunction
-  ( LFunction
-  , LFuncName
+  ( LFuncName
+  , LFunction
   , lookupFunc
   ) where
 
 import Control.Monad.Except
+import Data.Char (toLower)
 
 import Definition
 import LispError
@@ -14,10 +15,12 @@ type LFuncName = String
 type LFunction = [LispVal] -> Except LispError LispVal
 
 lookupFunc :: LFuncName -> Maybe LFunction
-lookupFunc name = lookup name primitives
+lookupFunc name = lookup name functionsMap
 
-primitives :: [(String, LFunction)]
-primitives = [
+------- Function Mapping Tuples -------
+
+functionsMap :: [(String, LFunction)]
+functionsMap = [
              -- Numeric Operations
                ("+",         numericBinop (+)  )
              , ("-",         numericBinop (-)  )
@@ -29,39 +32,50 @@ primitives = [
              , ("remainder", numericBinop rem  )
 
              -- Operations Resulting in Boolean Equalities
-             , ("=",         numBoolBinop (==) )
-             , ("<",         numBoolBinop (<)  )
-             , (">",         numBoolBinop (>)  )
-             , ("/=",        numBoolBinop (/=) )
-             , (">=",        numBoolBinop (>=) )
-             , ("<=",        numBoolBinop (<=) )
-             , ("&&",        boolBoolBinop (&&))
-             , ("||",        boolBoolBinop (||))
-             , ("string=?",  strBoolBinop (==) )
-             , ("string<=?", strBoolBinop (<=) )
-             , ("string>=?", strBoolBinop (>=) )
-             , ("string<?",  strBoolBinop (<)  )
-             , ("string>?",  strBoolBinop (>)  )
-             , ("car",       car               )
-             , ("cdr",       cdr               )
-             , ("cons",      cons              )
-             , ("eq?",       eqv               )
-             , ("eqv?",      eqv               )
-             , ("equal?",    equal             )
+             , ("=",            numBoolBinop (==) )
+             , ("<",            numBoolBinop (<)  )
+             , (">",            numBoolBinop (>)  )
+             , ("/=",           numBoolBinop (/=) )
+             , (">=",           numBoolBinop (>=) )
+             , ("<=",           numBoolBinop (<=) )
+             , ("&&",           boolBoolBinop (&&))
+             , ("||",           boolBoolBinop (||))
+             , ("string=?",     strBoolBinop id (==) )
+             , ("string<=?",    strBoolBinop id (<=) )
+             , ("string>=?",    strBoolBinop id (>=) )
+             , ("string<?",     strBoolBinop id (<)  )
+             , ("string>?",     strBoolBinop id (>)  )
+             , ("string-ci=?",  strBoolBinop (map toLower) (==) )
+             , ("string-ci<=?", strBoolBinop (map toLower) (<=) )
+             , ("string-ci>=?", strBoolBinop (map toLower) (>=) )
+             , ("string-ci<?",  strBoolBinop (map toLower) (<)  )
+             , ("string-ci>?",  strBoolBinop (map toLower) (>)  )
+             , ("eq?",          eqv               )
+             , ("eqv?",         eqv               )
+             , ("equal?",       equal             )
+
+             -- Lists/Pairs
+             , ("car",  car  )
+             , ("cdr",  cdr  )
+             , ("cons", cons )
 
              -- Type Testing
-             , ("string?",   isLString         )
-             , ("number?",   isLNumber         )
-             , ("symbol?",   isLAtom           )
+             , ("string?", isLString )
+             , ("number?", isLNumber )
+             , ("symbol?", isLAtom   )
 
              -- Symbol Handling
              , ("symbol->string", atomToString )
              , ("string->symbol", stringToAtom )
 
              -- String Functions
-             , ("make-string",    makeString   )
-             , ("string-length",  stringLength )
-             , ("string-ref",     stringRef    )
+             , ("make-string",   makeString   )
+             , ("string-length", stringLength )
+             , ("string-ref",    stringRef    )
+             , ("string-append", stringAppend )
+             , ("string-list",   stringToList )
+             , ("list-string",   listToString )
+             , ("substring",     substring    )
              ]
 
 
@@ -84,8 +98,8 @@ boolBinop unpacker op args = if length args /= 2
 numBoolBinop :: (SchemeNumber -> SchemeNumber -> Bool) -> LFunction
 numBoolBinop = boolBinop unpackNum
 
-strBoolBinop :: (String -> String -> Bool) -> LFunction
-strBoolBinop = boolBinop unpackStr
+strBoolBinop :: (String -> String) -> (String -> String -> Bool) -> LFunction
+strBoolBinop = boolBinop . unpackStr
 
 boolBoolBinop :: (Bool -> Bool -> Bool) -> LFunction
 boolBoolBinop = boolBinop unpackBool
@@ -139,7 +153,7 @@ equal [LDottedList xs xlast, LDottedList ys ylast] = do
 equal [arg1, arg2] = do
   primitiveEquals <- or <$> mapM (unpackEquals arg1 arg2)
                                  [ AnyUnpacker unpackNum
-                                 , AnyUnpacker unpackStr
+                                 , AnyUnpacker (unpackStr id)
                                  , AnyUnpacker unpackBool
                                  ]
 
@@ -201,6 +215,29 @@ stringRef [LString s, LNumber n] =
   let index = fromIntegral $ toInteger n
   in  if length s > index
         then return . LChar $ s !! index
-        else throwError . Default $ "Index " ++ show index ++
-                                    " is longer thanstring " ++ s
+        else throwError $ InvalidArgs "Index is longer than string" [LString s, LNumber n]
 stringRef args = throwError $ NumArgs 2 args
+
+substring :: LFunction
+substring [LString str, LNumber start, LNumber end] =
+  let s = fromIntegral $ toInteger start
+      e = fromIntegral (toInteger end) - s
+  in  return . LString . take e . drop s $ str
+substring args = throwError $ NumArgs 3 args
+
+stringAppend :: LFunction
+stringAppend []               = return $ LString ""
+stringAppend (LString s:strs) = (\(LString s') -> LString $ s ++ s') <$> stringAppend strs
+stringAppend args             = throwError $ InvalidArgs "Expected string list" args
+
+stringToList :: LFunction
+stringToList [LString s] = return . LList . map LChar $ s
+stringToList args        = throwError $ InvalidArgs "Expected string" args
+
+listToString :: LFunction
+listToString [LList lispvals] = LString <$> toString lispvals
+  where toString :: [LispVal] -> Except LispError String
+        toString []            = return ""
+        toString (LChar c:lvs) = (c:) <$> toString lvs
+        toString args          = throwError $ InvalidArgs "Expected a char list" args
+listToString args             = throwError $ InvalidArgs "Expected a char list" args
