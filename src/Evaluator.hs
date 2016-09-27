@@ -6,79 +6,86 @@ import Definition
 import LispError
 import LispFunction
 import Parser
+import Variable
 import Unpacker
 
 
-eval :: LispVal -> Evaled LispVal
-eval val@(LString _)       = return val
-eval val@(LNumber _)       = return val
-eval val@(LBool _)         = return val
-eval val@(LChar _)         = return val
-eval val@(LDottedList _ _) = return val
+eval :: Env -> LispVal -> IOEvaled LispVal
+eval _   val@(LString _)       = return val
+eval _   val@(LNumber _)       = return val
+eval _   val@(LBool _)         = return val
+eval _   val@(LChar _)         = return val
+eval _   val@(LDottedList _ _) = return val
+eval env (LAtom var)           = getVar env var
 
-eval val@(LList lvs)       = case lvs of
+eval env val@(LList lvs)       = case lvs of
   [LAtom "quote",      vs]        -> return vs
-  (LAtom "quasiquote": vs)        -> LList <$> sequence (evalUnquoted vs)
-  [LAtom "if", pred, conseq, alt] -> evalIf pred conseq alt
-  (LAtom "cond" : args)           -> evalCond args
-  (LAtom "case" : args)           -> evalCase args
-  (LAtom func : args)             -> mapM eval args >>= apply func
+  (LAtom "quasiquote": vs)        -> LList <$> sequence (evalUnquoted env vs)
+  [LAtom "if", pred, conseq, alt] -> evalIf env pred conseq alt
+  (LAtom "cond" : args)           -> evalCond env args
+  (LAtom "case" : args)           -> evalCase env args
+  (LAtom func : args)             -> mapM (eval env) args >>= apply func
   _                               -> return val
 
-eval badForm               =
+eval _   badForm               =
   throwError $ BadSpecialForm "Unrecognized special form" badForm
 
-evalUnquoted :: [LispVal] -> [Evaled LispVal]
-evalUnquoted (LList (LAtom "unquoted":vals):rest) = case vals of
-  LAtom "unpack":exprs -> map eval exprs ++ evalUnquoted rest
-  [expr]               -> eval expr : evalUnquoted rest
+evalUnquoted :: Env -> [LispVal] -> [IOEvaled LispVal]
+evalUnquoted env = go
+  where go :: [LispVal] -> [IOEvaled LispVal]
+        go (LList (LAtom "unquoted":vals):rest) = case vals of
+          LAtom "unpack":exprs -> map (eval env) exprs ++ go rest
+          [expr]               -> eval env expr : go rest
 
-evalUnquoted (v:vs) = return v  : evalUnquoted vs
-evalUnquoted []     = []
+        go (v:vs) = return v  : go vs
+        go []     = []
 
 apply :: LFuncName -> LFunction
 apply func args = maybe notFuncErr ($ args) $ lookupFunc func
   where
-    notFuncErr :: Evaled LispVal
+    notFuncErr :: IOEvaled LispVal
     notFuncErr = throwError $ NotFunction "Unrecognized primitive function args" func
 
-evalIf :: LispVal -> LispVal -> LispVal -> Evaled LispVal
-evalIf pred conseq alt = fmap unpackBoolCoerce (eval pred) >>= \bool ->
-  eval $ if bool then conseq else alt
+evalIf :: Env -> LispVal -> LispVal -> LispVal -> IOEvaled LispVal
+evalIf env pred conseq alt = fmap unpackBoolCoerce (eval env pred) >>= \bool ->
+  eval env $ if bool then conseq else alt
 
-evalCond :: LFunction
-evalCond (LList (LAtom "else":exprs):_)    = mapMLast eval exprs
-evalCond (LList [val, LAtom "=>", func]:_) = do
-  arg <- eval val
-  case func of
-    LAtom funcName -> apply funcName [arg]
-    _              ->
-      throwError . NotFunction "'=>' in 'cond' expects a function" $ show func
+evalCond :: Env -> LFunction
+evalCond env = go
+  where
+    go :: LFunction
+    go (LList (LAtom "else":exprs):_)    = mapMLast (eval env) exprs
+    go (LList [val, LAtom "=>", func]:_) = do
+      arg <- eval env val
+      case func of
+        LAtom funcName -> apply funcName [arg]
+        _              ->
+          throwError . NotFunction "'=>' in 'cond' expects a function" $ show func
 
-evalCond (LList [pred]:_)          = eval pred
-evalCond (LList (pred:exprs):rest) = fmap unpackBoolCoerce (eval pred) >>= \bool ->
-  if bool
-    then mapMLast eval exprs
-    else evalCond rest
-evalCond args = throwError $ InvalidArgs "No true condition for 'cond'" args
+    go (LList [pred]:_)          = eval env pred
+    go (LList (pred:exprs):rest) = fmap unpackBoolCoerce (eval env pred) >>= \bool ->
+      if bool
+        then mapMLast (eval env) exprs
+        else go rest
+    go args = throwError $ InvalidArgs "No true condition for 'cond'" args
 
-evalCase :: LFunction
-evalCase (keyArg:clauses) = checkCases clauses
+evalCase :: Env -> LFunction
+evalCase env (keyArg:clauses) = checkCases clauses
   where checkCases :: LFunction
         checkCases (LList (datum:exprs):clauses) = case datum of
-          LAtom "else" -> mapMLast eval exprs
-          LList keys   -> eval keyArg >>= (`matchKey` keys) >>= \match ->
+          LAtom "else" -> mapMLast (eval env) exprs
+          LList keys   -> eval env keyArg >>= (`matchKey` keys) >>= \match ->
                             if match
-                              then mapMLast eval exprs
+                              then mapMLast (eval env) exprs
                               else checkCases clauses
         checkCases args = throwError $ InvalidArgs "Exhausted datum matches in 'case'" args
 
-        matchKey :: LispVal -> [LispVal] -> Evaled Bool
+        matchKey :: LispVal -> [LispVal] -> IOEvaled Bool
         matchKey _   []       = return False
         matchKey key (v:vals) = eqv [key, v] >>= \(LBool bool) ->
           if bool then return bool else matchKey key vals
 
-evalCase args =
+evalCase _ args =
   throwError $ InvalidArgs "'case' excepts 'key' expression followed by 'clauses'" args
 
 

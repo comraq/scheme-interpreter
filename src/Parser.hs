@@ -11,11 +11,12 @@ import Text.ParserCombinators.Parsec
 
 import Definition
 import LispError
+import Variable
 
 
 ------- The Public Parsing Function -------
 
-readExpr :: String -> Except LispError LispVal
+readExpr :: String -> Evaled LispVal
 readExpr input = case parse parseExpr "lisp" input of
   Left err  -> throwError $ Parser err
   Right val -> return val

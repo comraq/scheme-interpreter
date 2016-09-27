@@ -7,13 +7,15 @@ module LispFunction
 
 import Control.Monad.Except
 import Data.Char (toLower)
+import Data.Foldable (foldrM)
 
 import Definition
 import LispError
+import Variable (IOEvaled, runIOEvaled)
 import Unpacker
 
 type LFuncName = String
-type LFunction = [LispVal] -> Evaled LispVal
+type LFunction = [LispVal] -> IOEvaled LispVal
 
 lookupFunc :: LFuncName -> Maybe LFunction
 lookupFunc name = lookup name functionsMap
@@ -86,10 +88,10 @@ numericBinop :: (SchemeNumber -> SchemeNumber -> SchemeNumber)
              -> LFunction
 numericBinop op params = LNumber . foldl1 op <$> mapM unpackNum params
 
-boolBinop :: (LispVal -> Evaled a)
+boolBinop :: (LispVal -> IOEvaled a)
           -> (a -> a -> Bool)
           -> [LispVal]
-          -> Evaled LispVal
+          -> IOEvaled LispVal
 boolBinop unpacker op args = if length args /= 2
                                then throwError $ NumArgs 2 args
                                else do left  <- unpacker $ head args
@@ -137,20 +139,28 @@ eqv [LNumber arg1,     LNumber arg2]     = return . LBool $ arg1 == arg2
 eqv [LString arg1,     LString arg2]     = return . LBool $ arg1 == arg2
 eqv [LAtom arg1,       LAtom arg2]       = return . LBool $ arg1 == arg2
 eqv [LDottedList xs x, LDottedList ys y] = eqv [LList $ xs ++ [x], LList $ ys ++ [y]]
-eqv [LList arg1,       LList arg2]       = return . LBool $
-    (length arg1 == length arg2) && all eqvPair (zip arg1 arg2)
-  where eqvPair :: (LispVal, LispVal) -> Bool
-        eqvPair (x1, x2) = case runExcept $ eqv [x1, x2] of
-          Left err          -> False
-          Right (LBool val) -> val
+eqv [LList arg1,       LList arg2]
+  | length arg1 /= length arg2 = return $ LBool False
+  | otherwise                  = liftIO $ LBool <$> allM eqvPair (zip arg1 arg2)
+      where
+        eqvPair :: (LispVal, LispVal) -> IO Bool
+        eqvPair (x1, x2) = runIOEvaled (const False) extractBool $ eqv [x1, x2]
+
+        extractBool :: LispVal -> Bool
+        extractBool (LBool b) = b
+        extractBool _         = False
+
 eqv [_,                _]                = return $ LBool False
 eqv badArgList                           = throwError $ NumArgs 2 badArgList
 
 equal :: LFunction
-equal [LList xs, LList ys] = return . LBool $ listEqual xs ys
+equal [LList xs, LList ys] = liftIO . fmap LBool $ listEqual xs ys
 equal [LDottedList xs xlast, LDottedList ys ylast] = do
   (LBool lastEquals) <- equal [xlast, ylast]
-  return . LBool $ lastEquals && listEqual xs ys
+  if lastEquals
+    then liftIO $ LBool <$> listEqual xs ys
+    else return $ LBool False
+
 equal [arg1, arg2] = do
   primitiveEquals <- or <$> mapM (unpackEquals arg1 arg2)
                                  [ AnyUnpacker unpackNum
@@ -162,13 +172,14 @@ equal [arg1, arg2] = do
   return . LBool $ (primitiveEquals || let (LBool x) = eqvEquals in x)
 equal badArgList   = throwError $ NumArgs 2 badArgList
 
-listEqual :: [LispVal] -> [LispVal] -> Bool
-listEqual []     []     = True
-listEqual (x:xs) (y:ys) = case runExcept $ equal [x, y] of
-  Right (LBool True) -> listEqual xs ys
-  _                  -> False
-listEqual _      _      = False
-
+listEqual :: [LispVal] -> [LispVal] -> IO Bool
+listEqual xs ys
+  | length xs /= length ys = return False
+  | otherwise              = allM equalPair $ zip xs ys
+      where equalPair :: (LispVal, LispVal) -> IO Bool
+            equalPair (x, y) = runIOEvaled (const False)
+                                           unpackBoolCoerce
+                                         $ equal [x, y]
 
 ------- Type Testing -------
 
@@ -204,7 +215,7 @@ makeString args = case args of
     [LNumber n, LChar c] -> mkStr (fromIntegral n, c)
     _                    -> throwError $ NumArgs 1 args
 
-  where mkStr :: (Int, Char) -> Evaled LispVal
+  where mkStr :: (Int, Char) -> IOEvaled LispVal
         mkStr = return . LString . uncurry replicate
 
 stringLength :: LFunction
@@ -237,8 +248,13 @@ stringToList args        = throwError $ InvalidArgs "Expected string" args
 
 listToString :: LFunction
 listToString [LList lispvals] = LString <$> toString lispvals
-  where toString :: [LispVal] -> Evaled String
+  where toString :: [LispVal] -> IOEvaled String
         toString []            = return ""
         toString (LChar c:lvs) = (c:) <$> toString lvs
         toString args          = throwError $ InvalidArgs "Expected a char list" args
 listToString args             = throwError $ InvalidArgs "Expected a char list" args
+
+
+------- Utility Functions -------
+allM :: (Foldable t, Monad m) => (a -> m Bool) -> t a -> m Bool
+allM f = foldrM (\a b -> (b &&) <$> f a) True
