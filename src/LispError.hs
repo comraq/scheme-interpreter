@@ -12,7 +12,7 @@ import Text.Parsec.Error
 
 import Definition
 
-type Evaled = Except LispError
+type Evaled a = Except LispError a
 
 data LispError = NumArgs        Integer    [LispVal]
                | TypeMismatch   String     LispVal

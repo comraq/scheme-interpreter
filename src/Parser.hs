@@ -11,7 +11,6 @@ import Text.ParserCombinators.Parsec
 
 import Definition
 import LispError
-import Variable
 
 
 ------- The Public Parsing Function -------
