@@ -6,24 +6,23 @@ module LispFunction
   ) where
 
 import Control.Monad.Except
-import Control.Monad.ST
 import Data.Char (toLower)
 import Data.Foldable (foldrM)
 
 import Definition
 import LispError
-import Variable (STEvaled, runSTEvaled)
+import Variable (IOEvaled, runIOEvaled)
 import Unpacker
 
 type LFuncName = String
-type LFunction s = [LispVal] -> STEvaled s LispVal
+type LFunction = [LispVal] -> IOEvaled LispVal
 
-lookupFunc :: LFuncName -> Maybe (LFunction s)
+lookupFunc :: LFuncName -> Maybe LFunction
 lookupFunc name = lookup name functionsMap
 
 ------- Function Mapping Tuples -------
 
-functionsMap :: [(String, LFunction s)]
+functionsMap :: [(String, LFunction)]
 functionsMap = [
              -- Numeric Operations
                ("+",         numericBinop (+)  )
@@ -86,44 +85,44 @@ functionsMap = [
 ------- Polymorphic Binary Operations -------
 
 numericBinop :: (SchemeNumber -> SchemeNumber -> SchemeNumber)
-             -> LFunction s
+             -> LFunction
 numericBinop op params = LNumber . foldl1 op <$> mapM unpackNum params
 
-boolBinop :: (LispVal -> STEvaled s a)
+boolBinop :: (LispVal -> IOEvaled a)
           -> (a -> a -> Bool)
           -> [LispVal]
-          -> STEvaled s LispVal
+          -> IOEvaled LispVal
 boolBinop unpacker op args = if length args /= 2
                                then throwError $ NumArgs 2 args
                                else do left  <- unpacker $ head args
                                        right <- unpacker $ args !! 1
                                        return . LBool $ left `op` right
 
-numBoolBinop :: (SchemeNumber -> SchemeNumber -> Bool) -> LFunction s
+numBoolBinop :: (SchemeNumber -> SchemeNumber -> Bool) -> LFunction
 numBoolBinop = boolBinop unpackNum
 
-strBoolBinop :: (String -> String) -> (String -> String -> Bool) -> LFunction s
+strBoolBinop :: (String -> String) -> (String -> String -> Bool) -> LFunction
 strBoolBinop = boolBinop . unpackStr
 
-boolBoolBinop :: (Bool -> Bool -> Bool) -> LFunction s
+boolBoolBinop :: (Bool -> Bool -> Bool) -> LFunction
 boolBoolBinop = boolBinop unpackBool
 
 
 ------- List/Pair Operations -------
 
-car :: LFunction s
+car :: LFunction
 car [LList (x:xs)]         = return x
 car [LDottedList (x:xs) _] = return x
 car [badArg]               = throwError $ TypeMismatch "pair" badArg
 car badArgList             = throwError $ NumArgs 1 badArgList
 
-cdr :: LFunction s
+cdr :: LFunction
 cdr [LList (_:xs)]         = return $ LList xs
 cdr [LDottedList (_:xs) x] = return $ LDottedList xs x
 cdr [badArg]               = throwError $ TypeMismatch "pair" badArg
 cdr badArgList             = throwError $ NumArgs 1 badArgList
 
-cons :: LFunction s
+cons :: LFunction
 cons [x, LList []]             = return $ LList [x]
 cons [x, LList xs]             = return . LList $ x:xs
 cons [x, LDottedList xs xlast] = return $ LDottedList (x:xs) xlast
@@ -133,7 +132,7 @@ cons badArgList                = throwError $ NumArgs 2 badArgList
 
 ------- Equality Checks -------
 
-eqv :: LFunction s
+eqv :: LFunction
 eqv [LBool arg1,       LBool arg2]       = return . LBool $ arg1 == arg2
 eqv [LChar arg1,       LChar arg2]       = return . LBool $ arg1 == arg2
 eqv [LNumber arg1,     LNumber arg2]     = return . LBool $ arg1 == arg2
@@ -142,10 +141,10 @@ eqv [LAtom arg1,       LAtom arg2]       = return . LBool $ arg1 == arg2
 eqv [LDottedList xs x, LDottedList ys y] = eqv [LList $ xs ++ [x], LList $ ys ++ [y]]
 eqv [LList arg1,       LList arg2]
   | length arg1 /= length arg2 = return $ LBool False
-  | otherwise                  = lift $ LBool <$> allM eqvPair (zip arg1 arg2)
+  | otherwise                  = liftIO . fmap LBool $ allM eqvPair (zip arg1 arg2)
       where
-        eqvPair :: (LispVal, LispVal) -> ST s Bool
-        eqvPair (x1, x2) = runSTEvaled (const False) extractBool $ eqv [x1, x2]
+        eqvPair :: (LispVal, LispVal) -> IO Bool
+        eqvPair (x1, x2) = runIOEvaled (const False) extractBool $ eqv [x1, x2]
 
         extractBool :: LispVal -> Bool
         extractBool (LBool b) = b
@@ -154,12 +153,12 @@ eqv [LList arg1,       LList arg2]
 eqv [_,                _]                = return $ LBool False
 eqv badArgList                           = throwError $ NumArgs 2 badArgList
 
-equal :: LFunction s
-equal [LList xs, LList ys] = lift . fmap LBool $ listEqual xs ys
+equal :: LFunction
+equal [LList xs, LList ys] = liftIO . fmap LBool $ listEqual xs ys
 equal [LDottedList xs xlast, LDottedList ys ylast] = do
   (LBool lastEquals) <- equal [xlast, ylast]
   if lastEquals
-    then lift $ LBool <$> listEqual xs ys
+    then liftIO . fmap LBool $ listEqual xs ys
     else return $ LBool False
 
 equal [arg1, arg2] = do
@@ -173,57 +172,57 @@ equal [arg1, arg2] = do
   return . LBool $ (primitiveEquals || let (LBool x) = eqvEquals in x)
 equal badArgList   = throwError $ NumArgs 2 badArgList
 
-listEqual :: [LispVal] -> [LispVal] -> ST s Bool
+listEqual :: [LispVal] -> [LispVal] -> IO Bool
 listEqual xs ys
   | length xs /= length ys = return False
   | otherwise              = allM equalPair $ zip xs ys
-      where equalPair :: (LispVal, LispVal) -> ST s Bool
-            equalPair (x, y) = runSTEvaled (const False)
+      where equalPair :: (LispVal, LispVal) -> IO Bool
+            equalPair (x, y) = runIOEvaled (const False)
                                            unpackBoolCoerce
-                                         $ equal [x, y]
+                                           (equal [x, y])
 
 ------- Type Testing -------
 
-isLString :: LFunction s
+isLString :: LFunction
 isLString [LString _] = return $ LBool True
 isLString vals        = throwError $ NumArgs 1 vals
 
-isLNumber :: LFunction s
+isLNumber :: LFunction
 isLNumber [LNumber _] = return $ LBool True
 isLNumber vals        = throwError $ NumArgs 1 vals
 
-isLAtom :: LFunction s
+isLAtom :: LFunction
 isLAtom [LAtom _] = return $ LBool True
 isLAtom vals      = throwError $ NumArgs 1 vals
 
 
 ------- Symbol Handling -------
 
-atomToString :: LFunction s
+atomToString :: LFunction
 atomToString [LAtom a] = return $ LString a
 atomToString vals      = throwError $ NumArgs 1 vals
 
-stringToAtom :: LFunction s
+stringToAtom :: LFunction
 stringToAtom [LString s] = return $ LAtom s
 stringToAtom vals        = throwError $ NumArgs 1 vals
 
 
 ------- String Functions -------
 
-makeString :: LFunction s
+makeString :: LFunction
 makeString args = case args of
     [LNumber n]          -> mkStr (fromIntegral n, ' ')
     [LNumber n, LChar c] -> mkStr (fromIntegral n, c)
     _                    -> throwError $ NumArgs 1 args
 
-  where mkStr :: (Int, Char) -> STEvaled s LispVal
+  where mkStr :: (Int, Char) -> IOEvaled LispVal
         mkStr = return . LString . uncurry replicate
 
-stringLength :: LFunction s
+stringLength :: LFunction
 stringLength [LString s] = return . LNumber . SInt . fromIntegral $ length s
 stringLength args        = throwError $ NumArgs 1 args
 
-stringRef :: LFunction s
+stringRef :: LFunction
 stringRef [LString s, LNumber n] =
   let index = fromIntegral $ toInteger n
   in  if length s > index
@@ -231,25 +230,25 @@ stringRef [LString s, LNumber n] =
         else throwError $ InvalidArgs "Index is longer than string" [LString s, LNumber n]
 stringRef args = throwError $ NumArgs 2 args
 
-substring :: LFunction s
+substring :: LFunction
 substring [LString str, LNumber start, LNumber end] =
-  let s = fromIntegral $ toInteger start
-      e = fromIntegral (toInteger end) - s
-  in  return . LString . take e . drop s $ str
+  let startI = fromIntegral $ toInteger start
+      sublen = fromIntegral (toInteger end) - startI
+  in  return . LString . take sublen . drop startI $ str
 substring args = throwError $ NumArgs 3 args
 
-stringAppend :: LFunction s
+stringAppend :: LFunction
 stringAppend []               = return $ LString ""
 stringAppend (LString s:strs) = (\(LString s') -> LString $ s ++ s') <$> stringAppend strs
 stringAppend args             = throwError $ InvalidArgs "Expected string list" args
 
-stringToList :: LFunction s
-stringToList [LString s] = return . LList . map LChar $ s
+stringToList :: LFunction
+stringToList [LString s] = return . LList $ map LChar s
 stringToList args        = throwError $ InvalidArgs "Expected string" args
 
-listToString :: LFunction s
+listToString :: LFunction
 listToString [LList lispvals] = LString <$> toString lispvals
-  where toString :: [LispVal] -> STEvaled s String
+  where toString :: [LispVal] -> IOEvaled String
         toString []            = return ""
         toString (LChar c:lvs) = (c:) <$> toString lvs
         toString args          = throwError $ InvalidArgs "Expected a char list" args

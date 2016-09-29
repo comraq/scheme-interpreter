@@ -2,7 +2,7 @@
 
 module LispError
   ( LispError(..)
-  , Evaled
+  , Parsed
   , trapError
   , extractValue
   ) where
@@ -12,11 +12,11 @@ import Text.Parsec.Error
 
 import Definition
 
-type Evaled a = Except LispError a
+type Parsed a = Except LispError a
 
 data LispError = NumArgs        Integer    [LispVal]
                | TypeMismatch   String     LispVal
-               | Parser         ParseError
+               | ParserErr      ParseError
                | BadSpecialForm String     LispVal
                | NotFunction    String     String
                | UnboundVar     String     String
@@ -34,7 +34,7 @@ showError (NumArgs        expected found)   =
   "Expected " ++ show expected ++ " args: found values " ++ unwordsList found
 showError (TypeMismatch   expected found)   =
   "Invalid type: expected " ++ expected ++ ", found " ++ show found
-showError (Parser         parseErr)         =
+showError (ParserErr      parseErr)         =
   "Parse error at " ++ show parseErr
 showError (InvalidArgs    message  args)    = message ++ ", got :" ++ show args
 
@@ -45,5 +45,5 @@ trapError :: MonadError LispError m => m String -> m String
 trapError action = catchError action $ return . show
 
 -- Undefined because 'extractValue' should never be called if error
-extractValue :: Evaled a -> a
+extractValue :: Parsed a -> a
 extractValue = either undefined id . runExcept

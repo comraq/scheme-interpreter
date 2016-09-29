@@ -10,14 +10,14 @@ import Numeric (readHex, readOct, readInt, readFloat, readDec)
 import Text.ParserCombinators.Parsec
 
 import Definition
-import LispError
+import LispError (LispError(..), Parsed)
 
 
 ------- The Public Parsing Function -------
 
-readExpr :: String -> Evaled LispVal
+readExpr :: String -> Parsed LispVal
 readExpr input = case parse parseExpr "lisp" input of
-  Left err  -> throwError $ Parser err
+  Left err  -> throwError $ ParserErr err
   Right val -> return val
 
 

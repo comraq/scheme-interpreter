@@ -1,16 +1,12 @@
 module Main where
 
-import Control.Arrow
-import Control.Monad.ST (stToIO, ST, runST)
 import Control.Monad (unless)
 import System.Environment
 import System.IO
 
-import Definition
 import Evaluator (eval)
-import LispError
 import Parser (readExpr)
-import Variable
+import Variable (Env, emptyEnv, liftParsed, runIOEvaledSafe)
 
 ------ Entry Point (Main) -------
 
@@ -34,20 +30,12 @@ flushStr str = putStr str >> hFlush stdout
 readPrompt :: String -> IO String
 readPrompt prompt = flushStr prompt >> getLine
 
-evalInputST :: String -> String
-evalInputST input = runST $ emptyEnv >>= evalInput input
-  where
-    getEvaled :: String -> STEvaled s LispVal
-    getEvaled = liftEvaled . readExpr
+evalInput :: Env -> String -> IO String
+evalInput env = runIOEvaledSafe . fmap show . (eval env =<<) . parseExpr
+  where parseExpr = liftParsed . readExpr
 
-    evalInput :: String -> Env s -> ST s String
-    evalInput = curry $ (getEvaled *** eval)
-      >>> uncurry (>>=)
-      >>> fmap show
-      >>> runSTEvaledStr
-
-evalAndPrint :: String -> IO ()
-evalAndPrint = putStrLn . evalInputST
+evalAndPrint :: Env -> String -> IO ()
+evalAndPrint env str = evalInput env str >>= putStrLn
 
 until_ :: Monad m => (a -> Bool) -> m a -> (a -> m ()) -> m ()
 until_ pred prompt action = do
@@ -56,7 +44,7 @@ until_ pred prompt action = do
                          until_ pred prompt action
 
 runRepl :: IO ()
-runRepl = until_ (== "quit") (readPrompt "Lisp>>> ") evalAndPrint
+runRepl = emptyEnv >>= until_ (== "quit") (readPrompt "Lisp>>> ") . evalAndPrint
 
 runOne :: String -> IO ()
-runOne = evalAndPrint
+runOne expr = emptyEnv >>= (`evalAndPrint` expr)

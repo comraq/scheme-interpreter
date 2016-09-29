@@ -1,2 +1,2 @@
 #!/bin/sh
-stack exec scheme-interpreter-exe
+stack exec scheme-interpreter-exe "$@"
