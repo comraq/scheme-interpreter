@@ -254,6 +254,9 @@ listToString [LList lispvals] = LString <$> toString lispvals
         toString args          = throwError $ InvalidArgs "Expected a char list" args
 listToString args             = throwError $ InvalidArgs "Expected a char list" args
 
+stringSet :: LFunction
+stringSet [LString str, LNumber index, LChar chr] = undefined
+
 
 ------- Utility Functions -------
 allM :: (Foldable t, Monad m) => (a -> m Bool) -> t a -> m Bool

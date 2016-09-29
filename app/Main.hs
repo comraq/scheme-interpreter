@@ -1,6 +1,10 @@
 module Main where
 
+import Control.Arrow
 import Control.Monad (unless)
+import Control.Monad.Trans (liftIO)
+import Data.Maybe (fromMaybe)
+import System.Console.Haskeline
 import System.Environment
 import System.IO
 
@@ -13,29 +17,29 @@ import Variable (Env, emptyEnv, liftParsed, runIOEvaledSafe)
 main :: IO ()
 main = do
   args <- getArgs
-  case length args of
+  runInputT defaultSettings $ case length args of
     0 -> runRepl
     1 -> runOne $ head args
-    _ -> putStrLn "Program only takes 0 to 1 argument(s)!"
+    _ -> outputStrLn "Program only takes 0 to 1 argument(s)!"
 
 mainI :: String -> IO ()
-mainI = runOne
+mainI = runInputT defaultSettings . runOne
 
 
 ------- REPL Functions -------
 
-flushStr :: String -> IO ()
-flushStr str = putStr str >> hFlush stdout
+readPrompt :: MonadException m => String -> InputT m String
+readPrompt = fmap (fromMaybe "") . getInputLine
 
-readPrompt :: String -> IO String
-readPrompt prompt = flushStr prompt >> getLine
-
-evalInput :: Env -> String -> IO String
-evalInput env = runIOEvaledSafe . fmap show . (eval env =<<) . parseExpr
+evalInputIO :: Env -> String -> IO String
+evalInputIO env = runIOEvaledSafe . fmap show . (eval env =<<) . parseExpr
   where parseExpr = liftParsed . readExpr
 
-evalAndPrint :: Env -> String -> IO ()
-evalAndPrint env str = evalInput env str >>= putStrLn
+evalInputT :: Env -> String -> InputT IO String
+evalInputT env = liftIO . evalInputIO env
+
+evalAndPrint :: Env -> String -> InputT IO ()
+evalAndPrint env str = evalInputT env str >>= outputStrLn
 
 until_ :: Monad m => (a -> Bool) -> m a -> (a -> m ()) -> m ()
 until_ pred prompt action = do
@@ -43,8 +47,10 @@ until_ pred prompt action = do
   unless (pred result) $ action result >>
                          until_ pred prompt action
 
-runRepl :: IO ()
-runRepl = emptyEnv >>= until_ (== "quit") (readPrompt "Lisp>>> ") . evalAndPrint
+runRepl :: InputT IO ()
+runRepl = liftIO emptyEnv >>= until_ userQuits (readPrompt "Lisp>>> ") . evalAndPrint
+  where userQuits :: String -> Bool
+        userQuits = ((== "quit") &&& (== ":q")) >>> uncurry (||)
 
-runOne :: String -> IO ()
-runOne expr = emptyEnv >>= (`evalAndPrint` expr)
+runOne :: String -> InputT IO ()
+runOne expr = liftIO emptyEnv >>= (`evalAndPrint` expr)
