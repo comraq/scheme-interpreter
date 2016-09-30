@@ -1,11 +1,25 @@
+{-# LANGUAGE ExistentialQuantification #-}
+
 module Definition
   ( LispVal(..)
   , SchemeNumber(..)
+  , SVector
   ) where
 
 import Control.Arrow
+
+import Control.Monad.ST
+import Data.Array
+import Data.Array.MArray
+import Data.Array.ST
+
 import Data.Ratio
 import Data.Complex
+
+
+------- Type Synonyms ------
+
+type SVector      = Array Int
 
 
 ------- Type Definitions -------
@@ -17,13 +31,14 @@ data LispVal = LAtom       String
              | LString     String
              | LBool       Bool
              | LChar       Char
-  deriving (Eq, Read)
+             | LVector     (SVector LispVal)
+  deriving Eq
 
 data SchemeNumber = SInt      Integer
                   | SDouble   Double
                   | SRational Rational
                   | SComplex  (Complex Double)
-  deriving (Eq, Read)
+  deriving Eq
 
 instance Show LispVal where
   show = showVal
@@ -43,6 +58,10 @@ showVal (LList contents)        = "(" ++ unwordsList contents ++ ")"
 showVal (LDottedList head tail) = "(" ++ unwordsList head ++ " . "
                                       ++ showVal tail     ++ ")"
 
+showVal (LVector vec)           = "#(" ++ showSVec vec ++ ")"
+  where showSVec :: SVector LispVal -> String
+        showSVec = unwordsList . elems
+
 unwordsList :: [LispVal] -> String
 unwordsList = unwords . map showVal
 
@@ -51,7 +70,6 @@ instance Show SchemeNumber where
   show (SDouble a)   = show a
   show (SRational a) = show (numerator a) ++ " / " ++ show (denominator a)
   show (SComplex a)  = show (realPart a)  ++ " + " ++ show (imagPart a) ++ "i"
-
 
 instance Num SchemeNumber where
   (+)         = addSNum

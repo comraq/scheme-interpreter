@@ -2,6 +2,7 @@ module Parser (readExpr) where
 
 import Control.Monad (void)
 import Control.Monad.Except
+import Data.Array.ST
 import Data.Char (digitToInt)
 import Data.Maybe (maybeToList)
 import Data.Ratio
@@ -11,14 +12,18 @@ import Text.ParserCombinators.Parsec
 
 import Definition
 import LispError (LispError(..), Parsed)
+import LispVector (vector)
 
 
 ------- The Public Parsing Function -------
 
 readExpr :: String -> Parsed LispVal
-readExpr input = case parse parseExpr "lisp" input of
-  Left err  -> throwError $ ParserErr err
-  Right val -> return val
+readExpr input = case parse expr "lisp" input of
+    Left err  -> throwError $ ParserErr err
+    Right val -> return val
+
+  where expr :: Parser LispVal
+        expr = parseExpr <* eof
 
 
 ------- Parsers -------
@@ -31,15 +36,17 @@ parseExpr = parseAtom
         <|> parseString
         <|> parseAnyQuoted
         <|> parseAnyList
+        <|> parseVector
 
 
 ------- Any Atom Parser -------
 
 parseAtom :: Parser LispVal
 parseAtom = do
-  first <- letter <|> minusSymbol <|> satisfy (\c -> c /= '-' && c `elem` symbolChars)
-  rest  <- many $ letter <|> digit <|> symbol
-  return . LAtom $ first : rest
+    first <- letter <|> minusSymbol <|> satisfy (\c -> c /= '-' && c `elem` symbolChars)
+    rest  <- many $ letter <|> digit <|> symbol
+    return . LAtom $ first : rest
+
   where minusSymbol :: Parser Char
         minusSymbol = char '-' <* notFollowedBy digit
 
@@ -102,7 +109,6 @@ validString = many1 (noneOf "\\\"") <|> escaped
 ------- Number Parsers -------
 
 parseNumber :: Parser LispVal
--- parseNumber = LNumber <$> parseSNumber
 parseNumber = fmap LNumber (peekFirst >> parseSNumber <?> "Parse: Invalid LNumber")
   where
     peekFirst :: Parser ()
@@ -129,7 +135,7 @@ parseSNumber = tryRational <|> tryComplex <|> noBase <|> try withBase
     getNumDouble :: Parser Double
     getNumDouble = do
       mbNeg  <- maybeNeg
-      [a, b] <- take 2 <$> many1 digit `sepBy1` char '.'
+      (a, b) <- many1 digit `sepByOnce` char '.'
       return . mbNeg . toDouble $ a ++ '.':b
 
     noBase :: Parser SchemeNumber
@@ -149,7 +155,7 @@ parseSNumber = tryRational <|> tryComplex <|> noBase <|> try withBase
 
     tryRational :: Parser SchemeNumber
     tryRational = try $ do
-      [a, b] <- take 2 <$> getNumInt `sepBy1` char '/'
+      (a, b) <- getNumInt `sepByOnce` char '/'
       return . SRational $ a % b
 
     tryComplex :: Parser SchemeNumber
@@ -180,21 +186,20 @@ parseSNumber = tryRational <|> tryComplex <|> noBase <|> try withBase
 ------- Quoted Parsers -------
 
 parseAnyQuoted :: Parser LispVal
-parseAnyQuoted = try parseQuasiQuoted <|> parseQuoted
+parseAnyQuoted = parseQuasiQuoted <|> parseQuoted
 
 parseQuoted :: Parser LispVal
 parseQuoted = do
-  oneOf "'`"
+  char '\''
   x <- parseExpr
   return $ LList [LAtom "quote", x]
 
--- TODO: Add support for ',@' to unquote and evaluate lists
 parseQuasiQuoted :: Parser LispVal
 parseQuasiQuoted = between (string "`(") (char ')') quasiQuoted
   where
     quasiQuoted :: Parser LispVal
     quasiQuoted = LList . (LAtom "quasiquote":)
-                  <$> ((unquoted <|> template) `sepBy` spaces1)
+                  <$> ((unquoted <|> parseExpr) `sepBy` spaces1)
 
     unquoted :: Parser LispVal
     unquoted = LList . (LAtom "unquoted":) <$> do
@@ -207,8 +212,6 @@ parseQuasiQuoted = between (string "`(") (char ')') quasiQuoted
       (LList vals) <- between (char '(') (char ')') parseList
       return $ LAtom "unpack":vals
 
-    template :: Parser LispVal
-    template = LAtom <$> many1 notSpace
 
 ------- List Parsers -------
 
@@ -226,6 +229,14 @@ parseDottedList =
   let head = parseExpr `endBy` spaces1
       tail = char '.' >> spaces1 >> parseExpr
   in  LDottedList <$> head <*> tail
+
+
+------- Vector Parser -------
+
+parseVector :: Parser LispVal
+parseVector = between (string "#(") (char ')') $ do
+  vals <- parseExpr `sepEndBy` spaces1
+  return $ LVector (runSTArray $ vector vals)
 
 
 ------- Helper Parsers -------
@@ -249,33 +260,5 @@ spaces1 =  skipMany1 space
 notSpace :: Parser Char
 notSpace = satisfy (/=' ')
 
-
-------- Unused -------
-
-parseNumber' :: Parser LispVal
-parseNumber' =  LNumber . read <$> many1 digit
-
-parseNumberDo :: Parser LispVal
-parseNumberDo =  do
-  num <- many1 digit
-  return . LNumber . read $ num
-
-{-
- - The following is commented out to avoid linter warning
- -
- - parseNumberBind :: Parser LispVal
- - parseNumberBind =  many1 digit >>= return . LNumber . read
- -}
-
-parseAtomBind :: Parser LispVal
-parseAtomBind = (letter <|> symbol) >>=
-  \first -> many (letter <|> digit <|> symbol) >>=
-    \rest ->
-      let atom = first : rest
-      in return $ case atom of
-        "#t" -> LBool True
-        "#f" -> LBool False
-        _    -> LAtom atom
-
-parseStringBind :: Parser LispVal
-parseStringBind =  char '"' >> many validString >>= \x -> char '"' >> return (LString $ concat x)
+sepByOnce :: Parser a -> Parser sep -> Parser (a, a)
+sepByOnce p sep = (,) <$> p <* sep <*> p

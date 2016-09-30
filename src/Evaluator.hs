@@ -2,11 +2,14 @@ module Evaluator (eval) where
 
 import Control.Arrow
 import Control.Monad.Except
+import Data.Array.MArray (thaw)
+import Data.Array.ST (runSTArray)
 import Data.Maybe (fromMaybe)
 
 import Definition
 import LispError
 import LispFunction
+import LispVector (vectorSet, vectorFill, vectorLength)
 import Parser
 import Variable
 import Unpacker (unpackBoolCoerce)
@@ -14,6 +17,8 @@ import Unpacker (unpackBoolCoerce)
 
 eval :: Env -> LispVal -> IOEvaled LispVal
 eval env (LAtom var)           = getVar env var
+eval env (LDottedList lvs lst) = LDottedList <$> mapM (eval env) lvs <*> eval env lst
+eval env (LVector lvs)         = LVector <$> mapM (eval env) lvs
 eval env val@(LList lvs)       = case lvs of
 
   -- Special Lists
@@ -31,7 +36,7 @@ eval env val@(LList lvs)       = case lvs of
     _      -> callFunc env func args
 
   -- Normal List
-  _ -> return val
+  _ -> LList <$> mapM (eval env) lvs
 
 eval _   val                   = return val
 
@@ -108,9 +113,11 @@ evalCase _ args =
  -}
 envFuncs :: [(LFuncName, Env -> LFunction)]
 envFuncs =
-  [ ("set!"       , setBang)
-  , ("define"     , define)
-  , ("string-set!", stringSetBang)
+  [ ("set!"       ,  setBang        )
+  , ("define"     ,  define         )
+  , ("string-set!",  stringSetBang  )
+  , ("vector-set!",  vectorSetBang  )
+  , ("vector-fill!", vectorFillBang )
   ]
 
 setBang :: Env -> LFunction
@@ -122,17 +129,17 @@ define env [LAtom var, form] = eval env form >>= defineVar env var
 define _   args              = throwError $ NumArgs 2 args
 
 stringSetBang :: Env -> LFunction
-stringSetBang env args@[LAtom expr, index, chr] = mapM (eval env) args >>= setStr
+stringSetBang env args@[LAtom expr, _, _] = mapM (eval env) args >>= setStr
   where
-    setStr :: [LispVal] -> IOEvaled LispVal
+    setStr :: LFunction
     setStr [LString str, LNumber i, LChar c]
-      | i < fromIntegral (length str) = setVar env expr . LString $ newStr str i c
+      | fromIntegral i < length str = setVar env expr . LString $ newStr str i c
       | otherwise      = throwError
-                       $ Default "index for 'string-set' exceeds string length"
+                       $ Default "index for 'string-set!' exceeds string length"
 
     setStr _ = throwError
              $ InvalidArgs
-               "'string-set' expects string, number and char as arguments"
+               "'string-set' expects string, number and char"
                args
 
     newStr :: (Num a, Eq a) => String -> a -> Char -> String
@@ -145,6 +152,36 @@ stringSetBang _   args@[x, y, z] = throwError
                                "'string-set' expects a binding to a string"
                                args
 stringSetBang _   args = throwError $ NumArgs 3 args
+
+vectorSetBang :: Env -> LFunction
+vectorSetBang env args@[LAtom expr, _, _] = mapM (eval env) args >>= setVec
+  where
+    setVec :: LFunction
+    setVec [LVector vec, LNumber i, val]
+      | fromIntegral i < vectorLength vec = setVar env expr . LVector $
+          runSTArray (thaw vec >>= vectorSet (fromIntegral i) val)
+      | otherwise = throwError
+                  $ Default "index for 'vector-set!' exceeds vector length"
+
+    setVec _ = throwError
+             $ InvalidArgs
+               "'vector-set!' expects vector, number and object"
+               args
+vectorSetBang _ args = throwError $ NumArgs 3 args
+
+vectorFillBang :: Env -> LFunction
+vectorFillBang env args@[LAtom expr, _] = mapM (eval env) args >>= fillVec
+  where
+    fillVec :: LFunction
+    fillVec [LVector vec, val] = setVar env expr . LVector $
+      runSTArray (thaw vec >>= vectorFill val)
+
+    fillVec _ = throwError
+              $ InvalidArgs
+                "'vector-fill!' expects vector and object"
+                args
+
+vectorFillBang _ args = throwError $ NumArgs 3 args
 
 
 ------- Utility Functions -------

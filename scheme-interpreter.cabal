@@ -19,13 +19,15 @@ library
                      , Evaluator
                      , LispError
                      , LispFunction
+                     , LispVector
                      , Parser
                      , Unpacker
                      , Variable
   build-depends:       base >= 4.7 && < 5
-                     , parsec
-                     , mtl
+                     , array
                      , haskeline
+                     , mtl
+                     , parsec
   default-language:    Haskell2010
 
 executable scheme-interpreter-exe

@@ -6,11 +6,13 @@ module LispFunction
   ) where
 
 import Control.Monad.Except
+import Data.Array.ST (runSTArray)
 import Data.Char (toLower)
 import Data.Foldable (foldrM)
 
 import Definition
 import LispError
+import qualified LispVector as V
 import Variable (IOEvaled, runIOEvaled)
 import Unpacker
 
@@ -19,6 +21,7 @@ type LFunction = [LispVal] -> IOEvaled LispVal
 
 lookupFunc :: LFuncName -> Maybe LFunction
 lookupFunc name = lookup name functionsMap
+
 
 ------- Function Mapping Tuples -------
 
@@ -67,6 +70,7 @@ functionsMap =
   , ("string?", isLString )
   , ("number?", isLNumber )
   , ("symbol?", isLAtom   )
+  , ("vector?", isLVector )
 
   -- Symbol Handling
   , ("symbol->string", atomToString )
@@ -77,9 +81,17 @@ functionsMap =
   , ("string-length", stringLength )
   , ("string-ref",    stringRef    )
   , ("string-append", stringAppend )
-  , ("string-list",   stringToList )
-  , ("list-string",   listToString )
+  , ("string->list",  stringToList )
+  , ("list->string",  listToString )
   , ("substring",     substring    )
+
+  -- Vector Functions,
+  , ("vector",        vector       )
+  , ("make-vector",   makeVector   )
+  , ("vector-length", vectorLength )
+  , ("vector-ref",    vectorRef    )
+  , ("list->vector",  listToVector )
+  , ("vector->list",  listToVector )
   ]
 
 
@@ -186,15 +198,23 @@ listEqual xs ys
 
 isLString :: LFunction
 isLString [LString _] = return $ LBool True
+isLString [val]       = return $ LBool False
 isLString vals        = throwError $ NumArgs 1 vals
 
 isLNumber :: LFunction
 isLNumber [LNumber _] = return $ LBool True
+isLNumber [val]       = return $ LBool False
 isLNumber vals        = throwError $ NumArgs 1 vals
 
 isLAtom :: LFunction
 isLAtom [LAtom _] = return $ LBool True
+isLAtom [val]     = return $ LBool False
 isLAtom vals      = throwError $ NumArgs 1 vals
+
+isLVector :: LFunction
+isLVector [LVector _] = return $ LBool True
+isLVector [val]       = return $ LBool False
+isLVector vals        = throwError $ NumArgs 1 vals
 
 
 ------- Symbol Handling -------
@@ -220,7 +240,7 @@ makeString args = case args of
         mkStr = return . LString . uncurry replicate
 
 stringLength :: LFunction
-stringLength [LString s] = return . LNumber . SInt . fromIntegral $ length s
+stringLength [LString s] = return . LNumber . SInt . toInteger $ length s
 stringLength args        = throwError $ NumArgs 1 args
 
 stringRef :: LFunction
@@ -256,6 +276,37 @@ listToString [LList lispvals] = LString <$> toString lispvals
 listToString args             = throwError $ InvalidArgs "Expected a char list" args
 
 
+------- Vector Functions -------
+
+vector :: LFunction
+vector args = return . LVector $ runSTArray (V.vector args)
+
+makeVector :: LFunction
+makeVector [LNumber n] =
+  return . LVector $ runSTArray (V.makeVector (fromIntegral n) $ LBool False)
+makeVector [LNumber n, val] =
+  return . LVector $ runSTArray (V.makeVector (fromIntegral n) val)
+makeVector args =
+  throwError $ InvalidArgs "Expected vector length and optional fill value" args
+
+vectorLength :: LFunction
+vectorLength [LVector v] = return . LNumber . SInt . toInteger $ V.vectorLength v
+vectorLength args        = throwError $ NumArgs 1 args
+
+vectorRef :: LFunction
+vectorRef [LVector v, LNumber n] = return . V.vectorRef v $ fromIntegral n
+vectorRef args                   = throwError $ NumArgs 2 args
+
+vectorToList :: LFunction
+vectorToList [LVector v] = return . LList $ V.vectorToList v
+vectorToList args        = throwError $ NumArgs 1 args
+
+listToVector :: LFunction
+listToVector [LList vals] = vector vals
+listToVector args         = throwError $ NumArgs 1 args
+
+
 ------- Utility Functions -------
+
 allM :: (Foldable t, Monad m) => (a -> m Bool) -> t a -> m Bool
 allM f = foldrM (\a b -> (b &&) <$> f a) True
