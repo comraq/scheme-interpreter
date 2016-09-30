@@ -5,6 +5,7 @@ module LispError
   , Parsed
   , trapError
   , extractValue
+  , bindingNotFound
   ) where
 
 import Control.Monad.Except
@@ -37,6 +38,7 @@ showError (TypeMismatch   expected found)   =
 showError (ParserErr      parseErr)         =
   "Parse error at " ++ show parseErr
 showError (InvalidArgs    message  args)    = message ++ ", got :" ++ show args
+showError (Default        message)          = "Error: " ++ message
 
 unwordsList :: [LispVal] -> String
 unwordsList = unwords . map show
@@ -47,3 +49,9 @@ trapError action = catchError action $ return . show
 -- Undefined because 'extractValue' should never be called if error
 extractValue :: Parsed a -> a
 extractValue = either undefined id . runExcept
+
+
+------- Helper Functions to Create LispErrors -------
+
+bindingNotFound :: String -> LispError
+bindingNotFound = UnboundVar "Cannot find binding"

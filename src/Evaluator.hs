@@ -1,6 +1,8 @@
 module Evaluator (eval) where
 
+import Control.Arrow
 import Control.Monad.Except
+import Data.Maybe (fromMaybe)
 
 import Definition
 import LispError
@@ -23,25 +25,15 @@ eval env val@(LList lvs)       = case lvs of
   (LAtom "cond" : args)           -> evalCond env args
   (LAtom "case" : args)           -> evalCase env args
 
-  -- Variable Bindings and Mutable Functions
-  [LAtom "set!", LAtom var, form]   -> eval env form >>= setVar env var
-  [LAtom "define", LAtom var, form] -> eval env form >>= defineVar env var
-
-  -- Regular Functions
-  (LAtom func : args) -> mapM (eval env) args >>= apply func
+  -- Eval as a Function
+  (LAtom func : args) -> case lookup func envFuncs of
+    Just f -> f env args
+    _      -> callFunc env func args
 
   -- Normal List
   _ -> return val
 
 eval _   val                   = return val
-
--- Currently unecessary pattern match cases for 'eval':
---   eval _   val@(LString _)       = return val
---   eval _   val@(LNumber _)       = return val
---   eval _   val@(LBool _)         = return val
---   eval _   val@(LChar _)         = return val
---   eval _   val@(LDottedList _ _) = return val
-
 
 evalUnquoted :: Env -> [LispVal] -> [IOEvaled LispVal]
 evalUnquoted env = go
@@ -53,11 +45,19 @@ evalUnquoted env = go
         go (v:vs) = return v  : go vs
         go []     = []
 
-apply :: LFuncName -> LFunction
-apply func args = maybe notFuncErr ($ args) $ lookupFunc func
-  where
-    notFuncErr :: IOEvaled LispVal
-    notFuncErr = throwError $ NotFunction "Unrecognized primitive function args" func
+
+------- Calling and Getting Scheme Functions -------
+
+callFunc :: Env -> LFuncName -> [LispVal] -> IOEvaled LispVal
+callFunc env fName args = join $ getFunc fName <*> mapM (eval env) args
+
+getFunc :: LFuncName -> IOEvaled LFunction
+getFunc = (notFuncErr &&& (fmap return . lookupFunc)) >>> uncurry fromMaybe
+  where notFuncErr :: LFuncName -> IOEvaled LFunction
+        notFuncErr = throwError . NotFunction "Unrecognized function binding"
+
+
+------- Evaluating Conditional Expressions -------
 
 evalIf :: Env -> LispVal -> LispVal -> LispVal -> IOEvaled LispVal
 evalIf env pred conseq alt = fmap unpackBoolCoerce (eval env pred) >>= \bool ->
@@ -68,12 +68,10 @@ evalCond env = go
   where
     go :: LFunction
     go (LList (LAtom "else":exprs):_)    = evalExprs env exprs
-    go (LList [val, LAtom "=>", func]:_) = do
-      arg <- eval env val
-      case func of
-        LAtom funcName -> apply funcName [arg]
-        _              ->
-          throwError . NotFunction "'=>' in 'cond' expects a function" $ show func
+    go (LList [val, LAtom "=>", func]:_) = case func of
+      LAtom funcName -> callFunc env funcName [val]
+      _              ->
+        throwError . NotFunction "'=>' in 'cond' expects a function" $ show func
 
     go (LList [pred]:_)          = eval env pred
     go (LList (pred:exprs):rest) = fmap unpackBoolCoerce (eval env pred) >>= \bool ->
@@ -101,6 +99,52 @@ evalCase env (keyArg:clauses) = checkCases clauses
 
 evalCase _ args =
   throwError $ InvalidArgs "'case' excepts 'key' expression followed by 'clauses'" args
+
+
+{-
+ - ------ Environment Interacting Functions -------
+ -
+ - > functions involving bindings or mutations
+ -}
+envFuncs :: [(LFuncName, Env -> LFunction)]
+envFuncs =
+  [ ("set!"       , setBang)
+  , ("define"     , define)
+  , ("string-set!", stringSetBang)
+  ]
+
+setBang :: Env -> LFunction
+setBang env [LAtom var, form] = eval env form >>= setVar env var
+setBang _   args              = throwError $ NumArgs 2 args
+
+define :: Env -> LFunction
+define env [LAtom var, form] = eval env form >>= defineVar env var
+define _   args              = throwError $ NumArgs 2 args
+
+stringSetBang :: Env -> LFunction
+stringSetBang env args@[LAtom expr, index, chr] = mapM (eval env) args >>= setStr
+  where
+    setStr :: [LispVal] -> IOEvaled LispVal
+    setStr [LString str, LNumber i, LChar c]
+      | i < fromIntegral (length str) = setVar env expr . LString $ newStr str i c
+      | otherwise      = throwError
+                       $ Default "index for 'string-set' exceeds string length"
+
+    setStr _ = throwError
+             $ InvalidArgs
+               "'string-set' expects string, number and char as arguments"
+               args
+
+    newStr :: (Num a, Eq a) => String -> a -> Char -> String
+    newStr (x:xs) i c
+      | i == 0    = c:xs
+      | otherwise = x : newStr xs (i - 1) c
+
+stringSetBang _   args@[x, y, z] = throwError
+                             $ InvalidArgs
+                               "'string-set' expects a binding to a string"
+                               args
+stringSetBang _   args = throwError $ NumArgs 3 args
 
 
 ------- Utility Functions -------

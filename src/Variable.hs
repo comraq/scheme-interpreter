@@ -18,7 +18,7 @@ import Data.IORef
 import Data.Maybe (isJust)
 
 import Definition
-import LispError (LispError(..), Parsed, trapError)
+import LispError (LispError(..), Parsed, trapError, bindingNotFound)
 
 type VarName    = String
 type VarBinding = (VarName, IORef LispVal)
@@ -60,7 +60,7 @@ isBound envRef var = isJust . lookup var <$> readIORef envRef
 getVar :: Env -> VarName -> IOEvaled LispVal
 getVar envRef var = do
   env <- liftIO $ readIORef envRef
-  maybe (throwError $ UnboundVar "Could not find binding for" var)
+  maybe (throwError $ bindingNotFound var)
         (liftIO . readIORef)
         (lookup var env)
 

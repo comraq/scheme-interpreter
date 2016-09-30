@@ -23,63 +23,64 @@ lookupFunc name = lookup name functionsMap
 ------- Function Mapping Tuples -------
 
 functionsMap :: [(String, LFunction)]
-functionsMap = [
-             -- Numeric Operations
-               ("+",         numericBinop (+)  )
-             , ("-",         numericBinop (-)  )
-             , ("*",         numericBinop (*)  )
-             , ("/",         numericBinop (/)  )
-             , ("div",       numericBinop div  )
-             , ("mod",       numericBinop mod  )
-             , ("quotient",  numericBinop quot )
-             , ("remainder", numericBinop rem  )
+functionsMap =
+  [
+  -- Numeric Operations
+    ("+",         numericBinop (+)  )
+  , ("-",         numericBinop (-)  )
+  , ("*",         numericBinop (*)  )
+  , ("/",         numericBinop (/)  )
+  , ("div",       numericBinop div  )
+  , ("mod",       numericBinop mod  )
+  , ("quotient",  numericBinop quot )
+  , ("remainder", numericBinop rem  )
 
-             -- Operations Resulting in Boolean Equalities
-             , ("=",            numBoolBinop (==) )
-             , ("<",            numBoolBinop (<)  )
-             , (">",            numBoolBinop (>)  )
-             , ("/=",           numBoolBinop (/=) )
-             , (">=",           numBoolBinop (>=) )
-             , ("<=",           numBoolBinop (<=) )
-             , ("&&",           boolBoolBinop (&&))
-             , ("||",           boolBoolBinop (||))
-             , ("string=?",     strBoolBinop id (==) )
-             , ("string<=?",    strBoolBinop id (<=) )
-             , ("string>=?",    strBoolBinop id (>=) )
-             , ("string<?",     strBoolBinop id (<)  )
-             , ("string>?",     strBoolBinop id (>)  )
-             , ("string-ci=?",  strBoolBinop (map toLower) (==) )
-             , ("string-ci<=?", strBoolBinop (map toLower) (<=) )
-             , ("string-ci>=?", strBoolBinop (map toLower) (>=) )
-             , ("string-ci<?",  strBoolBinop (map toLower) (<)  )
-             , ("string-ci>?",  strBoolBinop (map toLower) (>)  )
-             , ("eq?",          eqv               )
-             , ("eqv?",         eqv               )
-             , ("equal?",       equal             )
+  -- Operations Resulting in Boolean Equalities
+  , ("=",            numBoolBinop (==) )
+  , ("<",            numBoolBinop (<)  )
+  , (">",            numBoolBinop (>)  )
+  , ("/=",           numBoolBinop (/=) )
+  , (">=",           numBoolBinop (>=) )
+  , ("<=",           numBoolBinop (<=) )
+  , ("&&",           boolBoolBinop (&&))
+  , ("||",           boolBoolBinop (||))
+  , ("string=?",     strBoolBinop id (==) )
+  , ("string<=?",    strBoolBinop id (<=) )
+  , ("string>=?",    strBoolBinop id (>=) )
+  , ("string<?",     strBoolBinop id (<)  )
+  , ("string>?",     strBoolBinop id (>)  )
+  , ("string-ci=?",  strBoolBinop (map toLower) (==) )
+  , ("string-ci<=?", strBoolBinop (map toLower) (<=) )
+  , ("string-ci>=?", strBoolBinop (map toLower) (>=) )
+  , ("string-ci<?",  strBoolBinop (map toLower) (<)  )
+  , ("string-ci>?",  strBoolBinop (map toLower) (>)  )
+  , ("eq?",          eqv               )
+  , ("eqv?",         eqv               )
+  , ("equal?",       equal             )
 
-             -- Lists/Pairs
-             , ("car",  car  )
-             , ("cdr",  cdr  )
-             , ("cons", cons )
+  -- Lists/Pairs
+  , ("car",  car  )
+  , ("cdr",  cdr  )
+  , ("cons", cons )
 
-             -- Type Testing
-             , ("string?", isLString )
-             , ("number?", isLNumber )
-             , ("symbol?", isLAtom   )
+  -- Type Testing
+  , ("string?", isLString )
+  , ("number?", isLNumber )
+  , ("symbol?", isLAtom   )
 
-             -- Symbol Handling
-             , ("symbol->string", atomToString )
-             , ("string->symbol", stringToAtom )
+  -- Symbol Handling
+  , ("symbol->string", atomToString )
+  , ("string->symbol", stringToAtom )
 
-             -- String Functions
-             , ("make-string",   makeString   )
-             , ("string-length", stringLength )
-             , ("string-ref",    stringRef    )
-             , ("string-append", stringAppend )
-             , ("string-list",   stringToList )
-             , ("list-string",   listToString )
-             , ("substring",     substring    )
-             ]
+  -- String Functions
+  , ("make-string",   makeString   )
+  , ("string-length", stringLength )
+  , ("string-ref",    stringRef    )
+  , ("string-append", stringAppend )
+  , ("string-list",   stringToList )
+  , ("list-string",   listToString )
+  , ("substring",     substring    )
+  ]
 
 
 ------- Polymorphic Binary Operations -------
@@ -253,9 +254,6 @@ listToString [LList lispvals] = LString <$> toString lispvals
         toString (LChar c:lvs) = (c:) <$> toString lvs
         toString args          = throwError $ InvalidArgs "Expected a char list" args
 listToString args             = throwError $ InvalidArgs "Expected a char list" args
-
-stringSet :: LFunction
-stringSet [LString str, LNumber index, LChar chr] = undefined
 
 
 ------- Utility Functions -------
