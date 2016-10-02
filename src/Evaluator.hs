@@ -19,6 +19,7 @@ type LFuncBody   = [LispVal]
 
 eval :: Env -> LispVal -> IOEvaled LispVal
 eval env (LAtom var)           = getVar env var
+eval env (LMutable val)        = eval env val
 eval env (LDottedList lvs lst) = LDottedList <$> mapM (eval env) lvs <*> eval env lst
 eval env (LVector lvs)         = LVector <$> mapM (eval env) lvs
 eval env val@(LList lvs)       = case lvs of
@@ -170,29 +171,27 @@ lambda env (varargs@(LAtom _):body)          = makeVarargs varargs env []     bo
 lambda _ args = throwError $ InvalidArgs "Bad lambda expression" args
 
 stringSetBang :: Env -> LFunction
-stringSetBang env args@[LAtom expr, _, _] = mapM (eval env) args >>= setStr
+stringSetBang env args = case args of
+    LAtom var :rest@[_, _] -> mapM (eval env) (LAtom var:rest) >>= setStr >>= setVar env var
+    rest@[_, _, _]         -> mapM (eval env) rest >>= setStr
+    _                      -> throwError $ NumArgs 3 args
   where
     setStr :: LFunction
-    setStr [LString str, LNumber i, LChar c]
-      | fromIntegral i < length str = setVar env expr . LString $ newStr str i c
+    setStr [LMutable (LString str), LNumber i, LChar c]
+      | fromIntegral i < length str = return . LMutable . LString $ newStr str i c
       | otherwise      = throwError
                        $ Default "index for 'string-set!' exceeds string length"
 
+    setStr (LString str:_) = throwError $ ImmutableArg "expects mutable string" (LString str)
     setStr _ = throwError
              $ InvalidArgs
-               "'string-set' expects string, number and char"
+               "'string-set' expects mutable string, number and char"
                args
 
     newStr :: (Num a, Eq a) => String -> a -> Char -> String
     newStr (x:xs) i c
       | i == 0    = c:xs
       | otherwise = x : newStr xs (i - 1) c
-
-stringSetBang _   args@[x, y, z] = throwError
-                             $ InvalidArgs
-                               "'string-set' expects a binding to a string"
-                               args
-stringSetBang _   args = throwError $ NumArgs 3 args
 
 vectorSetBang :: Env -> LFunction
 vectorSetBang env args@[LAtom expr, _, _] = mapM (eval env) args >>= setVec
@@ -221,7 +220,6 @@ vectorFillBang env args@[LAtom expr, _] = mapM (eval env) args >>= fillVec
               $ InvalidArgs
                 "'vector-fill!' expects vector and object"
                 args
-
 vectorFillBang _ args = throwError $ NumArgs 3 args
 
 loadProc :: Env -> LFunction

@@ -54,6 +54,7 @@ data LispVal = LAtom          String
              | LBool          Bool
              | LChar          Char
              | LVector        (SVector LispVal)
+             | LMutable       LispVal
              | LPrimitiveFunc LFunction
 
              -- Constructor for user defined functions
@@ -79,6 +80,7 @@ data LispError = NumArgs        Int        [LispVal]
                | NotFunction    String     String
                | UnboundVar     String     String
                | InvalidArgs    String     [LispVal]
+               | ImmutableArg   String     LispVal
                | Default        String
 
 
@@ -92,6 +94,7 @@ showVal (LString contents)      = "\"" ++ contents ++ "\""
 showVal (LChar c)               = [c]
 showVal (LAtom name)            = name
 showVal (LNumber contents)      = show contents
+showVal (LMutable val)          = show val
 showVal (LBool bool)            = showLBool bool
   where
     showLBool :: Bool -> String
@@ -101,7 +104,6 @@ showVal (LBool bool)            = showLBool bool
 showVal (LList contents)        = "(" ++ unwordsList contents ++ ")"
 showVal (LDottedList head tail) = "(" ++ unwordsList head ++ " . "
                                       ++ showVal tail     ++ ")"
-
 showVal (LVector vec)           = "#(" ++ showSVec vec ++ ")"
   where showSVec :: SVector LispVal -> String
         showSVec = unwordsList . elems
@@ -304,7 +306,8 @@ showError (TypeMismatch   expected found)   =
   "Invalid type: expected " ++ expected ++ ", found " ++ show found
 showError (ParserErr      parseErr)         =
   "Parse error at " ++ show parseErr
-showError (InvalidArgs    message  args)    = message ++ ", got :" ++ show args
+showError (InvalidArgs    message  args)    = message ++ ", got: " ++ show args
+showError (ImmutableArg   message  arg)     = message ++ ", got constant: " ++ show arg
 showError (Default        message)          = "Error: " ++ message
 
 trapError :: MonadError LispError m => m String -> m String

@@ -231,11 +231,12 @@ makeString args = case args of
     _                    -> throwError $ NumArgs 1 args
 
   where mkStr :: (Int, Char) -> IOEvaled LispVal
-        mkStr = return . LString . uncurry replicate
+        mkStr = return . LMutable . LString . uncurry replicate
 
 stringLength :: LFunction
-stringLength [LString s] = return . LNumber . SInt . toInteger $ length s
-stringLength args        = throwError $ NumArgs 1 args
+stringLength (LMutable v:vs) = stringLength $ v:vs
+stringLength [LString s]     = return . LNumber . SInt . toInteger $ length s
+stringLength args            = throwError $ NumArgs 1 args
 
 stringRef :: LFunction
 stringRef [LString s, LNumber n] =
@@ -246,22 +247,26 @@ stringRef [LString s, LNumber n] =
 stringRef args = throwError $ NumArgs 2 args
 
 substring :: LFunction
+substring (LMutable v:vs) = substring $ v:vs
 substring [LString str, LNumber start, LNumber end] =
   let startI = fromIntegral $ toInteger start
       sublen = fromIntegral (toInteger end) - startI
-  in  return . LString . take sublen . drop startI $ str
+  in  return . LMutable . LString . take sublen . drop startI $ str
 substring args = throwError $ NumArgs 3 args
 
 stringAppend :: LFunction
-stringAppend []               = return $ LString ""
-stringAppend (LString s:strs) = (\(LString s') -> LString $ s ++ s') <$> stringAppend strs
+stringAppend []               = return . LMutable $ LString ""
+stringAppend (LMutable v:vs)  = stringAppend $ v:vs
+stringAppend (LString s:strs) = (\(LMutable (LString s')) -> LMutable . LString $ s ++ s') <$> stringAppend strs
 stringAppend args             = throwError $ InvalidArgs "Expected string list" args
 
 stringToList :: LFunction
-stringToList [LString s] = return . LList $ map LChar s
-stringToList args        = throwError $ InvalidArgs "Expected string" args
+stringToList (LMutable v:vs) = stringToList $ v:vs
+stringToList [LString s]     = return . LMutable . LList $ map LChar s
+stringToList args            = throwError $ InvalidArgs "Expected string" args
 
 listToString :: LFunction
+listToString (LMutable v:vs)  = listToString $ v:vs
 listToString [LList lispvals] = LString <$> toString lispvals
   where toString :: [LispVal] -> IOEvaled String
         toString []            = return ""
