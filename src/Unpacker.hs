@@ -7,7 +7,6 @@ module Unpacker where
 import Control.Monad.Except
 
 import Definition
-import LispError
 
 data Unpacker m = forall a. Eq a => AnyUnpacker (LispVal -> m a)
 

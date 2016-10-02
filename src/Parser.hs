@@ -11,7 +11,6 @@ import Numeric (readHex, readOct, readInt, readFloat, readDec)
 import Text.ParserCombinators.Parsec
 
 import Definition
-import LispError (LispError(..), Parsed)
 import LispVector (vector)
 
 

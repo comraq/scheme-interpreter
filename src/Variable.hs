@@ -1,9 +1,7 @@
 {-# LANGUAGE TupleSections #-}
 
 module Variable
-  ( Env
-  , IOEvaled
-  , runIOEvaled
+  ( runIOEvaled
   , runIOEvaledSafe
   , emptyEnv
   , liftParsed
@@ -18,12 +16,7 @@ import Data.IORef
 import Data.Maybe (isJust)
 
 import Definition
-import LispError (LispError(..), Parsed, trapError, bindingNotFound)
 
-type VarName    = String
-type VarBinding = (VarName, IORef LispVal)
-type Env        = IORef [VarBinding]
-type IOEvaled   = ExceptT LispError IO
 
 {-
  - Signatures of the commonly used 'IORef' functions below:

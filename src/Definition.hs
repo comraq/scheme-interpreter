@@ -1,38 +1,60 @@
-{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE ExistentialQuantification
+           , FlexibleContexts #-}
 
 module Definition
   ( LispVal(..)
   , SchemeNumber(..)
+  , LispError(..)
   , SVector
+  , VarName
+  , VarBinding
+  , LFuncName
+  , LFunction
+  , Env
+  , IOEvaled
+  , Parsed
+  , trapError
+  , extractValue
+  , bindingNotFound
   ) where
 
 import Control.Arrow
-
+import Control.Monad.Except
 import Control.Monad.ST
 import Data.Array
 import Data.Array.MArray
 import Data.Array.ST
-
+import Data.IORef
 import Data.Ratio
 import Data.Complex
+import Text.Parsec.Error
 
 
 ------- Type Synonyms ------
 
-type SVector      = Array Int
+type SVector    = Array Int
+type VarName    = String
+type VarBinding = (VarName, IORef LispVal)
+type Env        = IORef [VarBinding]
+type IOEvaled   = ExceptT LispError IO
+type Parsed a   = Except LispError a
+type LFuncName  = String
+type LFunction  = [LispVal] -> IOEvaled LispVal
+
 
 
 ------- Type Definitions -------
 
-data LispVal = LAtom       String
-             | LList       [LispVal]
-             | LDottedList [LispVal] LispVal
-             | LNumber     SchemeNumber
-             | LString     String
-             | LBool       Bool
-             | LChar       Char
-             | LVector     (SVector LispVal)
-  deriving Eq
+data LispVal = LAtom         String
+             | LList         [LispVal]
+             | LDottedList   [LispVal] LispVal
+             | LNumber       SchemeNumber
+             | LString       String
+             | LBool         Bool
+             | LChar         Char
+             | LVector       (SVector LispVal)
+             | PrimitiveFunc LFunction
+--   deriving Eq
 
 data SchemeNumber = SInt      Integer
                   | SDouble   Double
@@ -235,3 +257,41 @@ fracDivSNum (SComplex a) (SInt b)      = SComplex $ a / fromIntegral b
 fracDivSNum (SComplex a) (SDouble b)   = SComplex $ a / (b :+ 0)
 fracDivSNum (SComplex a) (SRational b) = SComplex $ a / fromRational b
 fracDivSNum (SComplex a) (SComplex b)  = SComplex $ a / b
+
+data LispError = NumArgs        Integer    [LispVal]
+               | TypeMismatch   String     LispVal
+               | ParserErr      ParseError
+               | BadSpecialForm String     LispVal
+               | NotFunction    String     String
+               | UnboundVar     String     String
+               | InvalidArgs    String     [LispVal]
+               | Default        String
+
+instance Show LispError where
+  show = showError
+
+showError :: LispError -> String
+showError (UnboundVar     message  varname) = message ++ ": " ++ varname
+showError (BadSpecialForm message  form)    = message ++ ": " ++ show form
+showError (NotFunction    message  func)    = message ++ ": " ++ show func
+showError (NumArgs        expected found)   =
+  "Expected " ++ show expected ++ " args: found values " ++ unwordsList found
+showError (TypeMismatch   expected found)   =
+  "Invalid type: expected " ++ expected ++ ", found " ++ show found
+showError (ParserErr      parseErr)         =
+  "Parse error at " ++ show parseErr
+showError (InvalidArgs    message  args)    = message ++ ", got :" ++ show args
+showError (Default        message)          = "Error: " ++ message
+
+trapError :: MonadError LispError m => m String -> m String
+trapError action = catchError action $ return . show
+
+-- Undefined because 'extractValue' should never be called if error
+extractValue :: Parsed a -> a
+extractValue = either undefined id . runExcept
+
+
+------- Helper Functions to Create LispErrors -------
+
+bindingNotFound :: String -> LispError
+bindingNotFound = UnboundVar "Cannot find binding"

@@ -8,9 +8,10 @@ import System.Console.Haskeline
 import System.Environment
 import System.IO
 
+import Definition (Env)
 import Evaluator (eval)
 import Parser (readExpr)
-import Variable (Env, emptyEnv, liftParsed, runIOEvaledSafe)
+import Variable (emptyEnv, liftParsed, runIOEvaledSafe)
 
 ------ Entry Point (Main) -------
 

@@ -1,7 +1,5 @@
 module LispFunction
-  ( LFuncName
-  , LFunction
-  , lookupFunc
+  ( lookupFunc
   , eqv
   ) where
 
@@ -11,13 +9,10 @@ import Data.Char (toLower)
 import Data.Foldable (foldrM)
 
 import Definition
-import LispError
 import qualified LispVector as V
-import Variable (IOEvaled, runIOEvaled)
+import Variable (runIOEvaled)
 import Unpacker
 
-type LFuncName = String
-type LFunction = [LispVal] -> IOEvaled LispVal
 
 lookupFunc :: LFuncName -> Maybe LFunction
 lookupFunc name = lookup name functionsMap

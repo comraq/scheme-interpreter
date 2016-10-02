@@ -7,7 +7,6 @@ import Data.Array.ST (runSTArray)
 import Data.Maybe (fromMaybe)
 
 import Definition
-import LispError
 import LispFunction
 import LispVector (vectorSet, vectorFill, vectorLength)
 import Parser
