@@ -10,8 +10,9 @@ import System.IO
 
 import Definition (Env)
 import Evaluator (eval)
+import LispFunction (primitiveEnv)
 import Parser (readExpr)
-import Variable (emptyEnv, liftParsed, runIOEvaledSafe)
+import Variable (liftParsed, runIOEvaledSafe)
 
 ------ Entry Point (Main) -------
 
@@ -49,9 +50,9 @@ until_ pred prompt action = do
                          until_ pred prompt action
 
 runRepl :: InputT IO ()
-runRepl = liftIO emptyEnv >>= until_ userQuits (readPrompt "Lisp>>> ") . evalAndPrint
+runRepl = liftIO primitiveEnv >>= until_ userQuits (readPrompt "Lisp>>> ") . evalAndPrint
   where userQuits :: String -> Bool
         userQuits = ((== "quit") &&& (== ":q")) >>> uncurry (||)
 
 runOne :: String -> InputT IO ()
-runOne expr = liftIO emptyEnv >>= (`evalAndPrint` expr)
+runOne expr = liftIO primitiveEnv >>= (`evalAndPrint` expr)

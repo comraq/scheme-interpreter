@@ -1,8 +1,9 @@
 module LispFunction
-  ( lookupFunc
+  ( primitiveEnv
   , eqv
   ) where
 
+import Control.Arrow
 import Control.Monad.Except
 import Data.Array.ST (runSTArray)
 import Data.Char (toLower)
@@ -10,15 +11,20 @@ import Data.Foldable (foldrM)
 
 import Definition
 import qualified LispVector as V
-import Variable (runIOEvaled)
+import Variable (runIOEvaled, emptyEnv, bindVars)
 import Unpacker
 
+primitiveEnv :: IO Env
+primitiveEnv = emptyEnv >>= (`bindVars` map makeFunc functionsMap)
+  where makeFunc :: (String, LFunction) -> (String, LispVal)
+        makeFunc = second LPrimitiveFunc
 
+-- Now unused due to the existence of 'primitiveBindings'
 lookupFunc :: LFuncName -> Maybe LFunction
 lookupFunc name = lookup name functionsMap
 
 
-------- Function Mapping Tuples -------
+------- Primitive Function Mapping Tuples -------
 
 functionsMap :: [(String, LFunction)]
 functionsMap =

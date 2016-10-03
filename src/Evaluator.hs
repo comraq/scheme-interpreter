@@ -4,7 +4,7 @@ import Control.Arrow
 import Control.Monad.Except
 import Data.Array.MArray (thaw)
 import Data.Array.ST (runSTArray)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 
 import Definition
 import LispFunction
@@ -13,6 +13,8 @@ import Parser
 import Variable
 import Unpacker (unpackBoolCoerce)
 
+type LFuncParams = [LispVal]
+type LFuncBody   = [LispVal]
 
 eval :: Env -> LispVal -> IOEvaled LispVal
 eval env (LAtom var)           = getVar env var
@@ -32,7 +34,7 @@ eval env val@(LList lvs)       = case lvs of
   -- Eval as a Function
   (LAtom func : args) -> case lookup func envFuncs of
     Just f -> f env args
-    _      -> callFunc env func args
+    _      -> callFunc env (LAtom func) args
 
   -- Normal List
   _ -> LList <$> mapM (eval env) lvs
@@ -52,13 +54,32 @@ evalUnquoted env = go
 
 ------- Calling and Getting Scheme Functions -------
 
-callFunc :: Env -> LFuncName -> [LispVal] -> IOEvaled LispVal
-callFunc env fName args = join $ getFunc fName <*> mapM (eval env) args
+callFunc :: Env -> LispVal -> LFunction
+callFunc env func args = join $ apply <$> eval env func <*> mapM (eval env) args
+  where
+    num :: [a] -> Int
+    num = length
 
-getFunc :: LFuncName -> IOEvaled LFunction
-getFunc = (notFuncErr &&& (fmap return . lookupFunc)) >>> uncurry fromMaybe
-  where notFuncErr :: LFuncName -> IOEvaled LFunction
-        notFuncErr = throwError . NotFunction "Unrecognized function binding"
+    apply :: LispVal -> LFunction
+    apply (LPrimitiveFunc f)                        args = f args
+    apply (LLambdaFunc params varargs body closure) args =
+      if num params /= num args && isNothing varargs
+        then throwError $ NumArgs (num params) args
+        else (liftIO . bindVars closure $ zip params args) -- Binds param names and function args to lambda closure env, then lift the IO results back to the monad transformers stack
+             >>= bindVarArgs varargs                       -- Bind the optional 'varargs' is applicable
+             >>= evalBody                                  -- Evals all expressions in the body and returns the results of the last expression
+
+      where
+        evalBody :: Env -> IOEvaled LispVal
+        evalBody env = mapMLast (eval env) body
+
+        bindVarArgs :: Maybe String -> Env -> IOEvaled Env
+        bindVarArgs Nothing    env     = return env
+        bindVarArgs (Just argName) env =
+          liftIO $ bindVars env [(argName, LList remainingArgs)]
+
+        remainingArgs :: [LispVal]
+        remainingArgs = drop (length params) args
 
 
 ------- Evaluating Conditional Expressions -------
@@ -73,8 +94,8 @@ evalCond env = go
     go :: LFunction
     go (LList (LAtom "else":exprs):_)    = evalExprs env exprs
     go (LList [val, LAtom "=>", func]:_) = case func of
-      LAtom funcName -> callFunc env funcName [val]
-      _              ->
+      LAtom _ -> callFunc env func [val]
+      _       ->
         throwError . NotFunction "'=>' in 'cond' expects a function" $ show func
 
     go (LList [pred]:_)          = eval env pred
@@ -112,10 +133,11 @@ evalCase _ args =
  -}
 envFuncs :: [(LFuncName, Env -> LFunction)]
 envFuncs =
-  [ ("set!"       ,  setBang        )
-  , ("define"     ,  define         )
-  , ("string-set!",  stringSetBang  )
-  , ("vector-set!",  vectorSetBang  )
+  [ ("set!"        , setBang        )
+  , ("define"      , define         )
+  , ("lambda"      , lambda         )
+  , ("string-set!" , stringSetBang  )
+  , ("vector-set!" , vectorSetBang  )
   , ("vector-fill!", vectorFillBang )
   ]
 
@@ -124,8 +146,22 @@ setBang env [LAtom var, form] = eval env form >>= setVar env var
 setBang _   args              = throwError $ NumArgs 2 args
 
 define :: Env -> LFunction
+
+-- 'define' a function binding
+define env (LList (LAtom func:params):body) =
+  makeNormalFunc env params body >>= defineVar env func
+define env (LDottedList (LAtom func:params) varargs:body) =
+  makeVarargs varargs env params body >>= defineVar env func
+
+-- 'define' a variable binding
 define env [LAtom var, form] = eval env form >>= defineVar env var
 define _   args              = throwError $ NumArgs 2 args
+
+lambda :: Env -> LFunction
+lambda env (LList params:body)               = makeNormalFunc env params body
+lambda env (LDottedList params varargs:body) = makeVarargs varargs env params body
+lambda env (varargs@(LAtom _):body)          = makeVarargs varargs env []     body
+lambda _ args = throwError $ InvalidArgs "Bad lambda expression" args
 
 stringSetBang :: Env -> LFunction
 stringSetBang env args@[LAtom expr, _, _] = mapM (eval env) args >>= setStr
@@ -191,6 +227,18 @@ vectorFillBang _ args = throwError $ NumArgs 3 args
  -}
 evalExprs :: Env -> [LispVal] -> IOEvaled LispVal
 evalExprs env = mapMLast (eval env)
+
+makeFunc :: Maybe String -> Env -> LFuncParams -> LFuncBody -> IOEvaled LispVal
+makeFunc varargs env params body = return $ LLambdaFunc (map show params)
+                                                        varargs
+                                                        body
+                                                        env
+
+makeNormalFunc :: Env -> LFuncParams -> LFuncBody -> IOEvaled LispVal
+makeNormalFunc = makeFunc Nothing
+
+makeVarargs :: LispVal -> Env -> LFuncParams -> LFuncBody -> IOEvaled LispVal
+makeVarargs = makeFunc . Just . show
 
 mapMLast :: Monad m => (a -> m b) -> [a] -> m b
 mapMLast f = fmap last . mapM f

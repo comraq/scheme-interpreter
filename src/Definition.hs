@@ -45,22 +45,40 @@ type LFunction  = [LispVal] -> IOEvaled LispVal
 
 ------- Type Definitions -------
 
-data LispVal = LAtom         String
-             | LList         [LispVal]
-             | LDottedList   [LispVal] LispVal
-             | LNumber       SchemeNumber
-             | LString       String
-             | LBool         Bool
-             | LChar         Char
-             | LVector       (SVector LispVal)
-             | PrimitiveFunc LFunction
---   deriving Eq
+data LispVal = LAtom          String
+             | LList          [LispVal]
+             | LDottedList    [LispVal] LispVal
+             | LNumber        SchemeNumber
+             | LString        String
+             | LBool          Bool
+             | LChar          Char
+             | LVector        (SVector LispVal)
+             | LPrimitiveFunc LFunction
+
+             -- Constructor for user defined functions
+             | LLambdaFunc    { params  :: [String]     -- parameter names
+                              , vararg  :: Maybe String -- variable name of the variable-length list of arguments
+                              , body    :: [LispVal]    -- function body, a list of expressions
+                              , closure :: Env          -- the environment which the function encloses over
+                              }
 
 data SchemeNumber = SInt      Integer
                   | SDouble   Double
                   | SRational Rational
                   | SComplex  (Complex Double)
   deriving Eq
+
+data LispError = NumArgs        Int        [LispVal]
+               | TypeMismatch   String     LispVal
+               | ParserErr      ParseError
+               | BadSpecialForm String     LispVal
+               | NotFunction    String     String
+               | UnboundVar     String     String
+               | InvalidArgs    String     [LispVal]
+               | Default        String
+
+
+------- Instance Implementations -------
 
 instance Show LispVal where
   show = showVal
@@ -83,6 +101,14 @@ showVal (LDottedList head tail) = "(" ++ unwordsList head ++ " . "
 showVal (LVector vec)           = "#(" ++ showSVec vec ++ ")"
   where showSVec :: SVector LispVal -> String
         showSVec = unwordsList . elems
+
+showVal (LPrimitiveFunc _)                  = "<primitive>"
+showVal (LLambdaFunc args varargs body env) =
+  "(lambda (" ++ unwords (map show args)
+              ++ (case varargs of
+                    Nothing  -> ""
+                    Just arg -> " . " ++ arg)
+              ++ ") ...)"
 
 unwordsList :: [LispVal] -> String
 unwordsList = unwords . map showVal
@@ -257,15 +283,6 @@ fracDivSNum (SComplex a) (SInt b)      = SComplex $ a / fromIntegral b
 fracDivSNum (SComplex a) (SDouble b)   = SComplex $ a / (b :+ 0)
 fracDivSNum (SComplex a) (SRational b) = SComplex $ a / fromRational b
 fracDivSNum (SComplex a) (SComplex b)  = SComplex $ a / b
-
-data LispError = NumArgs        Integer    [LispVal]
-               | TypeMismatch   String     LispVal
-               | ParserErr      ParseError
-               | BadSpecialForm String     LispVal
-               | NotFunction    String     String
-               | UnboundVar     String     String
-               | InvalidArgs    String     [LispVal]
-               | Default        String
 
 instance Show LispError where
   show = showError
