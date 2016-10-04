@@ -27,6 +27,7 @@ import Data.Array.ST
 import Data.IORef
 import Data.Ratio
 import Data.Complex
+import System.IO
 import Text.Parsec.Error
 
 
@@ -61,6 +62,9 @@ data LispVal = LAtom          String
                               , body    :: [LispVal]    -- function body, a list of expressions
                               , closure :: Env          -- the environment which the function encloses over
                               }
+
+             | LIOFunc        LFunction
+             | LPort          Handle
 
 data SchemeNumber = SInt      Integer
                   | SDouble   Double
@@ -109,6 +113,9 @@ showVal (LLambdaFunc args varargs body env) =
                     Nothing  -> ""
                     Just arg -> " . " ++ arg)
               ++ ") ...)"
+
+showVal (LIOFunc _)                         = "<IO primitive>"
+showVal (LPort _)                           = "<IO port>"
 
 unwordsList :: [LispVal] -> String
 unwordsList = unwords . map showVal

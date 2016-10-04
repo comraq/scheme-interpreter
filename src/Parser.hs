@@ -1,4 +1,4 @@
-module Parser (readExpr) where
+module Parser (readExpr, readExprList) where
 
 import Control.Monad (void)
 import Control.Monad.Except
@@ -16,20 +16,23 @@ import LispVector (vector)
 
 ------- The Public Parsing Function -------
 
-readExpr :: String -> Parsed LispVal
-readExpr input = case parse expr "lisp" input of
-    Left err  -> throwError $ ParserErr err
-    Right val -> return val
+readOrThrow :: Parser a -> String -> Parsed a
+readOrThrow parser input = case parse parser "lisp" input of
+  Left err  -> throwError $ ParserErr err
+  Right val -> return val
 
-  where expr :: Parser LispVal
-        expr = parseExpr <* eof
+readExpr :: String -> Parsed LispVal
+readExpr = readOrThrow $ parseExpr <* eof
+
+readExprList :: String -> Parsed [LispVal]
+readExprList = readOrThrow $ endBy parseExpr spaces
 
 
 ------- Parsers -------
 
 parseExpr :: Parser LispVal
-parseExpr = parseAtom
-        <|> parseNumber
+parseExpr = parseNumber
+        <|> parseAtom
         <|> parseChar
         <|> parseBool
         <|> parseString
@@ -42,12 +45,8 @@ parseExpr = parseAtom
 
 parseAtom :: Parser LispVal
 parseAtom = do
-    first <- letter <|> minusSymbol <|> satisfy (\c -> c /= '-' && c `elem` symbolChars)
-    rest  <- many $ letter <|> digit <|> symbol
-    return . LAtom $ first : rest
-
-  where minusSymbol :: Parser Char
-        minusSymbol = char '-' <* notFollowedBy digit
+  atom <- many1 $ letter <|> digit <|> symbol
+  return . LAtom $ atom
 
 
 ------- Bool Parser -------
@@ -108,10 +107,7 @@ validString = many1 (noneOf "\\\"") <|> escaped
 ------- Number Parsers -------
 
 parseNumber :: Parser LispVal
-parseNumber = fmap LNumber (peekFirst >> parseSNumber <?> "Parse: Invalid LNumber")
-  where
-    peekFirst :: Parser ()
-    peekFirst = void . try . lookAhead $ digit <|> (char '-' >> digit)
+parseNumber = fmap LNumber . try $ parseSNumber <* notFollowedBy (letter <|> digit <|> symbol)
 
 parseSNumber :: Parser SchemeNumber
 parseSNumber = tryRational <|> tryComplex <|> noBase <|> try withBase
@@ -138,7 +134,7 @@ parseSNumber = tryRational <|> tryComplex <|> noBase <|> try withBase
       return . mbNeg . toDouble $ a ++ '.':b
 
     noBase :: Parser SchemeNumber
-    noBase = SDouble <$> try getNumDouble <|> SInt <$> getNumInt
+    noBase = fmap SDouble (try getNumDouble) <|> fmap SInt (try getNumInt)
 
     withBase :: Parser SchemeNumber
     withBase = char '#' >> oneOf baseChars >>= getNumFromBaseChar
@@ -189,9 +185,9 @@ parseAnyQuoted = parseQuasiQuoted <|> parseQuoted
 
 parseQuoted :: Parser LispVal
 parseQuoted = do
-  char '\''
-  x <- parseExpr
-  return $ LList [LAtom "quote", x]
+    skipMany1 (char '\'')
+    x <- parseExpr
+    return $ LList [LAtom "quote", x]
 
 parseQuasiQuoted :: Parser LispVal
 parseQuasiQuoted = between (string "`(") (char ')') quasiQuoted

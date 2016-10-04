@@ -1,10 +1,11 @@
-module Evaluator (eval) where
+module Evaluator (eval, primitiveEnv) where
 
 import Control.Arrow
 import Control.Monad.Except
 import Data.Array.MArray (thaw)
 import Data.Array.ST (runSTArray)
 import Data.Maybe (fromMaybe, isNothing)
+import System.IO
 
 import Definition
 import LispFunction
@@ -56,30 +57,30 @@ evalUnquoted env = go
 
 callFunc :: Env -> LispVal -> LFunction
 callFunc env func args = join $ apply <$> eval env func <*> mapM (eval env) args
+
+apply :: LispVal -> LFunction
+apply (LPrimitiveFunc f)                        args = f args
+apply (LLambdaFunc params varargs body closure) args =
+  if num params /= num args && isNothing varargs
+    then throwError $ NumArgs (num params) args
+    else (liftIO . bindVars closure $ zip params args) -- Binds param names and function args to lambda closure env, then lift the IO results back to the monad transformers stack
+         >>= bindVarArgs varargs                       -- Bind the optional 'varargs' is applicable
+         >>= evalBody                                  -- Evals all expressions in the body and returns the results of the last expression
+
   where
     num :: [a] -> Int
     num = length
 
-    apply :: LispVal -> LFunction
-    apply (LPrimitiveFunc f)                        args = f args
-    apply (LLambdaFunc params varargs body closure) args =
-      if num params /= num args && isNothing varargs
-        then throwError $ NumArgs (num params) args
-        else (liftIO . bindVars closure $ zip params args) -- Binds param names and function args to lambda closure env, then lift the IO results back to the monad transformers stack
-             >>= bindVarArgs varargs                       -- Bind the optional 'varargs' is applicable
-             >>= evalBody                                  -- Evals all expressions in the body and returns the results of the last expression
+    evalBody :: Env -> IOEvaled LispVal
+    evalBody env = mapMLast (eval env) body
 
-      where
-        evalBody :: Env -> IOEvaled LispVal
-        evalBody env = mapMLast (eval env) body
+    bindVarArgs :: Maybe String -> Env -> IOEvaled Env
+    bindVarArgs Nothing        env = return env
+    bindVarArgs (Just argName) env =
+      liftIO $ bindVars env [(argName, LList remainingArgs)]
 
-        bindVarArgs :: Maybe String -> Env -> IOEvaled Env
-        bindVarArgs Nothing    env     = return env
-        bindVarArgs (Just argName) env =
-          liftIO $ bindVars env [(argName, LList remainingArgs)]
-
-        remainingArgs :: [LispVal]
-        remainingArgs = drop (length params) args
+    remainingArgs :: [LispVal]
+    remainingArgs = drop (length params) args
 
 
 ------- Evaluating Conditional Expressions -------
@@ -109,18 +110,22 @@ evalCase :: Env -> LFunction
 evalCase env (keyArg:clauses) = checkCases clauses
   where
     checkCases :: LFunction
-    checkCases (LList (datum:exprs):clauses) = case datum of
-      LAtom "else" -> evalExprs env exprs
-      LList keys   -> eval env keyArg >>= (`matchKey` keys) >>= \match ->
-                        if match
-                          then evalExprs env exprs
-                          else checkCases clauses
-    checkCases args = throwError $ InvalidArgs "Exhausted datum matches in 'case'" args
+    checkCases (LList (LAtom "else":exprs):clauses) = evalExprs env exprs
+    checkCases (LList (LList keys  :exprs):clauses) =
+      eval env keyArg >>= (`matchKey` keys) >>= \match ->
+        if match
+          then evalExprs env exprs
+          else checkCases clauses
+    checkCases (_:clauses) = checkCases clauses
+    checkCases [] = throwError $ Default "Exhausted datum matches in 'case'"
 
     matchKey :: LispVal -> [LispVal] -> IOEvaled Bool
     matchKey _   []       = return False
     matchKey key (v:vals) = eqv [key, v] >>= \(LBool bool) ->
       if bool then return bool else matchKey key vals
+
+    eqv :: LFunction
+    eqv = eval env . LList . (LAtom "eqv?":)
 
 evalCase _ args =
   throwError $ InvalidArgs "'case' excepts 'key' expression followed by 'clauses'" args
@@ -139,6 +144,7 @@ envFuncs =
   , ("string-set!" , stringSetBang  )
   , ("vector-set!" , vectorSetBang  )
   , ("vector-fill!", vectorFillBang )
+  , ("load"        , loadProc       )
   ]
 
 setBang :: Env -> LFunction
@@ -217,6 +223,69 @@ vectorFillBang env args@[LAtom expr, _] = mapM (eval env) args >>= fillVec
                 args
 
 vectorFillBang _ args = throwError $ NumArgs 3 args
+
+loadProc :: Env -> LFunction
+loadProc env [LString filename] = load filename >>= mapMLast (eval env)
+
+------- Environment with both Primitive and IOPrimitive Function Bindings -------
+
+primitiveEnv :: IO Env
+primitiveEnv = emptyEnv >>= (`bindVars` (primFuncs ++ ioPrimFuncs))
+  where
+    makeFunc :: (LFunction -> LispVal) -> (String, LFunction) -> (String, LispVal)
+    makeFunc = second
+
+    primFuncs :: [(String, LispVal)]
+    primFuncs = map (makeFunc LPrimitiveFunc) primitiveFuncs
+
+    ioPrimFuncs :: [(String, LispVal)]
+    ioPrimFuncs = map (makeFunc LIOFunc) ioPrimitiveFuncs
+
+ioPrimitiveFuncs :: [(String, LFunction)]
+ioPrimitiveFuncs =
+  [ ("apply",             applyProc         )
+  , ("open-input-file",   makePort ReadMode )
+  , ("open-output-file",  makePort WriteMode)
+  , ("close-input-port",  closePort         )
+  , ("close-output-port", closePort         )
+  , ("read",              readProc          )
+  , ("write",             writeProc         )
+  , ("read-contents",     readContents      )
+  , ("read-all",          readAll           )
+  ]
+
+
+------- IO Primitive Functions -------
+
+applyProc :: LFunction
+applyProc [func, LList args] = apply func args
+applyProc (func : args)      = apply func args
+
+makePort :: IOMode -> LFunction
+makePort mode [LString filename] = LPort <$> liftIO (openFile filename mode)
+
+closePort :: LFunction
+closePort [LPort port] = liftIO $  hClose port
+                                >> return (LBool True)
+closePort _            = return $ LBool False
+
+readProc :: LFunction
+readProc []           = readProc [LPort stdin]
+readProc [LPort port] = liftIO (hGetLine port) >>= liftParsed . readExpr
+
+writeProc :: LFunction
+writeProc [obj]             = writeProc [obj, LPort stdout]
+writeProc [obj, LPort port] = liftIO $  hPrint port obj
+                                     >> return (LBool True)
+
+readContents :: LFunction
+readContents [LString filename] = LString <$> liftIO (readFile filename)
+
+readAll :: LFunction
+readAll [LString filename] = LList <$> load filename
+
+load :: String -> IOEvaled [LispVal]
+load filename = liftIO (readFile filename) >>= liftParsed . readExprList
 
 
 ------- Utility Functions -------

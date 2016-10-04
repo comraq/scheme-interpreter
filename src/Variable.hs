@@ -69,11 +69,11 @@ setVar envRef var value = do
 
 {-
  - Note: If var binding is not previously defined:
- -       - creates a 'ST' action
+ -       - creates a 'IO' action
  -       - create new 'IORef' for the value to be defined with
  -       - read the current environment
  -       - write the "(var binding, value IORef)" pair into environment
- -       - lift plain 'ST' action back into the monad transformer stack
+ -       - lift plain 'IO' action back into the monad transformer stack
  -}
 defineVar :: Env -> VarName -> LispVal -> IOEvaled LispVal
 defineVar envRef var value = do
