@@ -1,10 +1,15 @@
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TupleSections
+           , FlexibleContexts
+  #-}
 
 module Variable
   ( runIOEvaled
   , runIOEvaledSafe
   , emptyEnv
-  , liftParsed
+  , liftEvaled
+  , trapError
+  , runEvaled
+  , bindingNotFound
   , getVar
   , setVar
   , defineVar
@@ -27,8 +32,11 @@ import Definition
 emptyEnv :: IO Env
 emptyEnv = newIORef []
 
-liftParsed :: Parsed a -> IOEvaled a
-liftParsed = either throwError return . runExcept
+liftEvaled :: Evaled a -> IOEvaled a
+liftEvaled = either throwError return . runExcept
+
+runEvaled :: (LispError -> b) -> (a -> b) -> Evaled a -> b
+runEvaled errHandler sucHandler = either errHandler sucHandler . runExcept
 
 runIOEvaled :: (LispError -> b) -> (a -> b) -> IOEvaled a -> IO b
 runIOEvaled errHandler sucHandler = fmap (either errHandler sucHandler)
@@ -95,3 +103,13 @@ bindVars envRef bindings = readIORef envRef >>= extendEnv bindings >>= newIORef
 
         addBinding :: (VarName, LispVal) -> IO VarBinding
         addBinding (var, value) = (var,) <$> newIORef value
+
+trapError :: MonadError LispError m => m String -> m String
+trapError action = catchError action $ return . show
+
+
+
+------- Helper Functions to Create LispErrors -------
+
+bindingNotFound :: String -> LispError
+bindingNotFound = UnboundVar "Cannot find binding"

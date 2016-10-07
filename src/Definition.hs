@@ -1,6 +1,3 @@
-{-# LANGUAGE ExistentialQuantification
-           , FlexibleContexts #-}
-
 module Definition
   ( LispVal(..)
   , SchemeNumber(..)
@@ -10,37 +7,35 @@ module Definition
   , VarBinding
   , LFuncName
   , LFunction
+  , LIOFunction
   , Env
+  , Evaled
   , IOEvaled
-  , Parsed
-  , trapError
-  , extractValue
-  , bindingNotFound
   ) where
 
 import Control.Arrow
 import Control.Monad.Except
-import Control.Monad.ST
+import Control.Monad.State
 import Data.Array
-import Data.Array.MArray
-import Data.Array.ST
+import Data.Complex
 import Data.IORef
 import Data.Ratio
-import Data.Complex
 import System.IO
 import Text.Parsec.Error
 
 
 ------- Type Synonyms ------
 
-type SVector    = Array Int
-type VarName    = String
-type VarBinding = (VarName, IORef LispVal)
-type Env        = IORef [VarBinding]
-type IOEvaled   = ExceptT LispError IO
-type Parsed a   = Except LispError a
-type LFuncName  = String
-type LFunction  = [LispVal] -> IOEvaled LispVal
+type SVector     = Array Int
+type VarName     = String
+type VarBinding  = (VarName, IORef LispVal)
+type Env         = IORef [VarBinding]
+type IOEvaled    = ExceptT LispError IO
+type Evaled a    = Except LispError a
+type LFuncName   = String
+type LFunction   = [LispVal] -> Evaled LispVal
+type LIOFunction = [LispVal] -> IOEvaled LispVal
+
 
 
 
@@ -64,7 +59,7 @@ data LispVal = LAtom          String
                               , closure :: Env          -- the environment which the function encloses over
                               }
 
-             | LIOFunc        LFunction
+             | LIOFunc        LIOFunction
              | LPort          Handle
 
 data SchemeNumber = SInt      Integer
@@ -309,16 +304,3 @@ showError (ParserErr      parseErr)         =
 showError (InvalidArgs    message  args)    = message ++ ", got: " ++ show args
 showError (ImmutableArg   message  arg)     = message ++ ", got constant: " ++ show arg
 showError (Default        message)          = "Error: " ++ message
-
-trapError :: MonadError LispError m => m String -> m String
-trapError action = catchError action $ return . show
-
--- Undefined because 'extractValue' should never be called if error
-extractValue :: Parsed a -> a
-extractValue = either undefined id . runExcept
-
-
-------- Helper Functions to Create LispErrors -------
-
-bindingNotFound :: String -> LispError
-bindingNotFound = UnboundVar "Cannot find binding"

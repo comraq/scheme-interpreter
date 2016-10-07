@@ -16,15 +16,15 @@ import LispVector (vector)
 
 ------- The Public Parsing Function -------
 
-readOrThrow :: Parser a -> String -> Parsed a
+readOrThrow :: Parser a -> String -> Evaled a
 readOrThrow parser input = case parse parser "lisp" input of
   Left err  -> throwError $ ParserErr err
   Right val -> return val
 
-readExpr :: String -> Parsed LispVal
+readExpr :: String -> Evaled LispVal
 readExpr = readOrThrow $ parseExpr <* eof
 
-readExprList :: String -> Parsed [LispVal]
+readExprList :: String -> Evaled [LispVal]
 readExprList = readOrThrow $ endBy parseExpr spaces
 
 

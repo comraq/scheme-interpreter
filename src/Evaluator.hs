@@ -15,7 +15,6 @@ import Variable
 import Unpacker (unpackBoolCoerce)
 
 type LFuncParams = [LispVal]
-type LFuncBody   = [LispVal]
 
 eval :: Env -> LispVal -> IOEvaled LispVal
 eval env (LAtom var)           = getVar env var
@@ -56,11 +55,11 @@ evalUnquoted env = go
 
 ------- Calling and Getting Scheme Functions -------
 
-callFunc :: Env -> LispVal -> LFunction
+callFunc :: Env -> LispVal -> LIOFunction
 callFunc env func args = join $ apply <$> eval env func <*> mapM (eval env) args
 
-apply :: LispVal -> LFunction
-apply (LPrimitiveFunc f)                        args = f args
+apply :: LispVal -> LIOFunction
+apply (LPrimitiveFunc f)                        args = liftEvaled $ f args
 apply (LLambdaFunc params varargs body closure) args =
   if num params /= num args && isNothing varargs
     then throwError $ NumArgs (num params) args
@@ -90,10 +89,10 @@ evalIf :: Env -> LispVal -> LispVal -> LispVal -> IOEvaled LispVal
 evalIf env pred conseq alt = fmap unpackBoolCoerce (eval env pred) >>= \bool ->
   eval env $ if bool then conseq else alt
 
-evalCond :: Env -> LFunction
+evalCond :: Env -> LIOFunction
 evalCond env = go
   where
-    go :: LFunction
+    go :: LIOFunction
     go (LList (LAtom "else":exprs):_)    = evalExprs env exprs
     go (LList [val, LAtom "=>", func]:_) = case func of
       LAtom _ -> callFunc env func [val]
@@ -107,10 +106,10 @@ evalCond env = go
         else go rest
     go args = throwError $ InvalidArgs "No true condition for 'cond'" args
 
-evalCase :: Env -> LFunction
+evalCase :: Env -> LIOFunction
 evalCase env (keyArg:clauses) = checkCases clauses
   where
-    checkCases :: LFunction
+    checkCases :: LIOFunction
     checkCases (LList (LAtom "else":exprs):clauses) = evalExprs env exprs
     checkCases (LList (LList keys  :exprs):clauses) =
       eval env keyArg >>= (`matchKey` keys) >>= \match ->
@@ -125,7 +124,7 @@ evalCase env (keyArg:clauses) = checkCases clauses
     matchKey key (v:vals) = eqv [key, v] >>= \(LBool bool) ->
       if bool then return bool else matchKey key vals
 
-    eqv :: LFunction
+    eqv :: LIOFunction
     eqv = eval env . LList . (LAtom "eqv?":)
 
 evalCase _ args =
@@ -137,7 +136,7 @@ evalCase _ args =
  -
  - > functions involving bindings or mutations
  -}
-envFuncs :: [(LFuncName, Env -> LFunction)]
+envFuncs :: [(LFuncName, Env -> LIOFunction)]
 envFuncs =
   [ ("set!"        , setBang        )
   , ("define"      , define         )
@@ -148,11 +147,11 @@ envFuncs =
   , ("load"        , loadProc       )
   ]
 
-setBang :: Env -> LFunction
+setBang :: Env -> LIOFunction
 setBang env [LAtom var, form] = eval env form >>= setVar env var
 setBang _   args              = throwError $ NumArgs 2 args
 
-define :: Env -> LFunction
+define :: Env -> LIOFunction
 
 -- 'define' a function binding
 define env (LList (LAtom func:params):body) =
@@ -164,19 +163,19 @@ define env (LDottedList (LAtom func:params) varargs:body) =
 define env [LAtom var, form] = eval env form >>= defineVar env var
 define _   args              = throwError $ NumArgs 2 args
 
-lambda :: Env -> LFunction
+lambda :: Env -> LIOFunction
 lambda env (LList params:body)               = makeNormalFunc env params body
 lambda env (LDottedList params varargs:body) = makeVarargs varargs env params body
 lambda env (varargs@(LAtom _):body)          = makeVarargs varargs env []     body
 lambda _ args = throwError $ InvalidArgs "Bad lambda expression" args
 
-stringSetBang :: Env -> LFunction
+stringSetBang :: Env -> LIOFunction
 stringSetBang env args = case args of
-    LAtom var :rest@[_, _] -> mapM (eval env) (LAtom var:rest) >>= setStr >>= setVar env var
-    rest@[_, _, _]         -> mapM (eval env) rest >>= setStr
-    _                      -> throwError $ NumArgs 3 args
+    LAtom var:[_, _] -> mapM (eval env) args >>= setStr >>= setVar env var
+    [_, _, _]        -> mapM (eval env) args >>= setStr
+    _                -> throwError $ NumArgs 3 args
   where
-    setStr :: LFunction
+    setStr :: LIOFunction
     setStr [LMutable (LString str), LNumber i, LChar c]
       | fromIntegral i < length str = return . LMutable . LString $ newStr str i c
       | otherwise      = throwError
@@ -193,10 +192,10 @@ stringSetBang env args = case args of
       | i == 0    = c:xs
       | otherwise = x : newStr xs (i - 1) c
 
-vectorSetBang :: Env -> LFunction
+vectorSetBang :: Env -> LIOFunction
 vectorSetBang env args@[LAtom expr, _, _] = mapM (eval env) args >>= setVec
   where
-    setVec :: LFunction
+    setVec :: LIOFunction
     setVec [LVector vec, LNumber i, val]
       | fromIntegral i < vectorLength vec = setVar env expr . LVector $
           runSTArray (thaw vec >>= vectorSet (fromIntegral i) val)
@@ -209,10 +208,10 @@ vectorSetBang env args@[LAtom expr, _, _] = mapM (eval env) args >>= setVec
                args
 vectorSetBang _ args = throwError $ NumArgs 3 args
 
-vectorFillBang :: Env -> LFunction
+vectorFillBang :: Env -> LIOFunction
 vectorFillBang env args@[LAtom expr, _] = mapM (eval env) args >>= fillVec
   where
-    fillVec :: LFunction
+    fillVec :: LIOFunction
     fillVec [LVector vec, val] = setVar env expr . LVector $
       runSTArray (thaw vec >>= vectorFill val)
 
@@ -222,15 +221,15 @@ vectorFillBang env args@[LAtom expr, _] = mapM (eval env) args >>= fillVec
                 args
 vectorFillBang _ args = throwError $ NumArgs 3 args
 
-loadProc :: Env -> LFunction
+loadProc :: Env -> LIOFunction
 loadProc env [LString filename] = load filename >>= mapMLast (eval env)
+
 
 ------- Environment with both Primitive and IOPrimitive Function Bindings -------
 
 primitiveEnv :: IO Env
 primitiveEnv = emptyEnv >>= (`bindVars` (primFuncs ++ ioPrimFuncs))
   where
-    makeFunc :: (LFunction -> LispVal) -> (String, LFunction) -> (String, LispVal)
     makeFunc = second
 
     primFuncs :: [(String, LispVal)]
@@ -239,7 +238,7 @@ primitiveEnv = emptyEnv >>= (`bindVars` (primFuncs ++ ioPrimFuncs))
     ioPrimFuncs :: [(String, LispVal)]
     ioPrimFuncs = map (makeFunc LIOFunc) ioPrimitiveFuncs
 
-ioPrimitiveFuncs :: [(String, LFunction)]
+ioPrimitiveFuncs :: [(String, LIOFunction)]
 ioPrimitiveFuncs =
   [ ("apply",             applyProc         )
   , ("open-input-file",   makePort ReadMode )
@@ -255,35 +254,35 @@ ioPrimitiveFuncs =
 
 ------- IO Primitive Functions -------
 
-applyProc :: LFunction
+applyProc :: LIOFunction
 applyProc [func, LList args] = apply func args
 applyProc (func : args)      = apply func args
 
-makePort :: IOMode -> LFunction
+makePort :: IOMode -> LIOFunction
 makePort mode [LString filename] = LPort <$> liftIO (openFile filename mode)
 
-closePort :: LFunction
+closePort :: LIOFunction
 closePort [LPort port] = liftIO $  hClose port
                                 >> return (LBool True)
 closePort _            = return $ LBool False
 
-readProc :: LFunction
+readProc :: LIOFunction
 readProc []           = readProc [LPort stdin]
-readProc [LPort port] = liftIO (hGetLine port) >>= liftParsed . readExpr
+readProc [LPort port] = liftIO (hGetLine port) >>= liftEvaled . readExpr
 
-writeProc :: LFunction
+writeProc :: LIOFunction
 writeProc [obj]             = writeProc [obj, LPort stdout]
 writeProc [obj, LPort port] = liftIO $  hPrint port obj
                                      >> return (LBool True)
 
-readContents :: LFunction
+readContents :: LIOFunction
 readContents [LString filename] = LString <$> liftIO (readFile filename)
 
-readAll :: LFunction
+readAll :: LIOFunction
 readAll [LString filename] = LList <$> load filename
 
 load :: String -> IOEvaled [LispVal]
-load filename = liftIO (readFile filename) >>= liftParsed . readExprList
+load filename = liftIO (readFile filename) >>= liftEvaled . readExprList
 
 
 ------- Utility Functions -------
@@ -292,19 +291,19 @@ load filename = liftIO (readFile filename) >>= liftParsed . readExprList
  - Evaluates all lispval expressions only returning the result of the last
  - evaluated lispval
  -}
-evalExprs :: Env -> [LispVal] -> IOEvaled LispVal
+evalExprs :: Env -> LIOFunction
 evalExprs env = mapMLast (eval env)
 
-makeFunc :: Maybe String -> Env -> LFuncParams -> LFuncBody -> IOEvaled LispVal
+makeFunc :: Maybe String -> Env -> LFuncParams -> LIOFunction
 makeFunc varargs env params body = return $ LLambdaFunc (map show params)
                                                         varargs
                                                         body
                                                         env
 
-makeNormalFunc :: Env -> LFuncParams -> LFuncBody -> IOEvaled LispVal
+makeNormalFunc :: Env -> LFuncParams -> LIOFunction
 makeNormalFunc = makeFunc Nothing
 
-makeVarargs :: LispVal -> Env -> LFuncParams -> LFuncBody -> IOEvaled LispVal
+makeVarargs :: LispVal -> Env -> LFuncParams -> LIOFunction
 makeVarargs = makeFunc . Just . show
 
 mapMLast :: Monad m => (a -> m b) -> [a] -> m b

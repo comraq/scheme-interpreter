@@ -8,13 +8,8 @@ import Data.Foldable (foldrM)
 
 import Definition
 import qualified LispVector as V
-import Variable (runIOEvaled, emptyEnv, bindVars)
+import Variable (runEvaled)
 import Unpacker
-
-
--- Now unused due to the existence of 'primitiveBindings'
-lookupFunc :: LFuncName -> Maybe LFunction
-lookupFunc name = lookup name primitiveFuncs
 
 
 ------- Primitive Function Mapping Tuples -------
@@ -95,10 +90,9 @@ numericBinop :: (SchemeNumber -> SchemeNumber -> SchemeNumber)
              -> LFunction
 numericBinop op params = LNumber . foldl1 op <$> mapM unpackNum params
 
-boolBinop :: (LispVal -> IOEvaled a)
+boolBinop :: (LispVal -> Evaled a)
           -> (a -> a -> Bool)
-          -> [LispVal]
-          -> IOEvaled LispVal
+          -> LFunction
 boolBinop unpacker op args = if length args /= 2
                                then throwError $ NumArgs 2 args
                                else do left  <- unpacker $ head args
@@ -148,10 +142,10 @@ eqv [LAtom arg1,       LAtom arg2]       = return . LBool $ arg1 == arg2
 eqv [LDottedList xs x, LDottedList ys y] = eqv [LList $ xs ++ [x], LList $ ys ++ [y]]
 eqv [LList arg1,       LList arg2]
   | length arg1 /= length arg2 = return $ LBool False
-  | otherwise                  = liftIO . fmap LBool $ allM eqvPair (zip arg1 arg2)
+  | otherwise                  = return . LBool $ all eqvPair (zip arg1 arg2)
       where
-        eqvPair :: (LispVal, LispVal) -> IO Bool
-        eqvPair (x1, x2) = runIOEvaled (const False) extractBool $ eqv [x1, x2]
+        eqvPair :: (LispVal, LispVal) -> Bool
+        eqvPair (x1, x2) = runEvaled (const False) extractBool $ eqv [x1, x2]
 
         extractBool :: LispVal -> Bool
         extractBool (LBool b) = b
@@ -161,11 +155,11 @@ eqv [_,                _]                = return $ LBool False
 eqv badArgList                           = throwError $ NumArgs 2 badArgList
 
 equal :: LFunction
-equal [LList xs, LList ys] = liftIO . fmap LBool $ listEqual xs ys
+equal [LList xs, LList ys] = return . LBool $ listEqual xs ys
 equal [LDottedList xs xlast, LDottedList ys ylast] = do
   (LBool lastEquals) <- equal [xlast, ylast]
   if lastEquals
-    then liftIO . fmap LBool $ listEqual xs ys
+    then return . LBool $ listEqual xs ys
     else return $ LBool False
 
 equal [arg1, arg2] = do
@@ -179,14 +173,14 @@ equal [arg1, arg2] = do
   return . LBool $ (primitiveEquals || let (LBool x) = eqvEquals in x)
 equal badArgList   = throwError $ NumArgs 2 badArgList
 
-listEqual :: [LispVal] -> [LispVal] -> IO Bool
+listEqual :: [LispVal] -> [LispVal] -> Bool
 listEqual xs ys
-  | length xs /= length ys = return False
-  | otherwise              = allM equalPair $ zip xs ys
-      where equalPair :: (LispVal, LispVal) -> IO Bool
-            equalPair (x, y) = runIOEvaled (const False)
-                                           unpackBoolCoerce
-                                           (equal [x, y])
+  | length xs /= length ys = False
+  | otherwise              = all equalPair $ zip xs ys
+      where equalPair :: (LispVal, LispVal) -> Bool
+            equalPair (x, y) = runEvaled (const False)
+                                         unpackBoolCoerce
+                                         (equal [x, y])
 
 ------- Type Testing -------
 
@@ -230,7 +224,7 @@ makeString args = case args of
     [LNumber n, LChar c] -> mkStr (fromIntegral n, c)
     _                    -> throwError $ NumArgs 1 args
 
-  where mkStr :: (Int, Char) -> IOEvaled LispVal
+  where mkStr :: (Int, Char) -> Evaled LispVal
         mkStr = return . LMutable . LString . uncurry replicate
 
 stringLength :: LFunction
@@ -268,7 +262,7 @@ stringToList args            = throwError $ InvalidArgs "Expected string" args
 listToString :: LFunction
 listToString (LMutable v:vs)  = listToString $ v:vs
 listToString [LList lispvals] = LString <$> toString lispvals
-  where toString :: [LispVal] -> IOEvaled String
+  where toString :: [LispVal] -> Evaled String
         toString []            = return ""
         toString (LChar c:lvs) = (c:) <$> toString lvs
         toString args          = throwError $ InvalidArgs "Expected a char list" args

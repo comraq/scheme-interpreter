@@ -11,7 +11,7 @@ import System.IO
 import Definition
 import Evaluator (eval, primitiveEnv)
 import Parser (readExpr)
-import Variable (liftParsed, runIOEvaledSafe, bindVars)
+import Variable (liftEvaled, runIOEvaledSafe, bindVars)
 
 
 ------ Entry Point (Main) -------
@@ -50,7 +50,7 @@ runCmd args = do
     filename :: LispVal
     filename = LString $ head args
 
-    load :: Env -> LFunction
+    load :: Env -> LIOFunction
     load env = eval env . LList . (LAtom "load":)
 
 
@@ -61,7 +61,7 @@ readPrompt = fmap (fromMaybe "") . getInputLine
 
 evalInputIO :: Env -> String -> IO String
 evalInputIO env = runIOEvaledSafe . fmap show . (eval env =<<) . parseExpr
-  where parseExpr = liftParsed . readExpr
+  where parseExpr = liftEvaled . readExpr
 
 evalInputT :: Env -> String -> InputT IO String
 evalInputT env = liftIO . evalInputIO env
