@@ -27,15 +27,8 @@ eval env val@(LList lvs)       = case lvs of
   [LAtom "quote",      vs] -> return vs
   (LAtom "quasiquote": vs) -> LList <$> sequence (evalUnquoted env vs)
 
-  -- Conditional Functions
-  [LAtom "if", pred, conseq, alt] -> evalIf env pred conseq alt
-  (LAtom "cond" : args)           -> evalCond env args
-  (LAtom "case" : args)           -> evalCase env args
-
   -- Eval as a Function
-  (LAtom func : args) -> case lookup func envFuncs of
-    Just f -> f env args
-    _      -> callFunc env (LAtom func) args
+  (LAtom func : args) -> callFunc env (LAtom func) args
 
   -- Normal List
   _ -> LList <$> mapM (eval env) lvs
@@ -56,7 +49,10 @@ evalUnquoted env = go
 ------- Calling and Getting Scheme Functions -------
 
 callFunc :: Env -> LispVal -> LIOFunction
-callFunc env func args = join $ apply <$> eval env func <*> mapM (eval env) args
+callFunc env func args = eval env func >>= funcApply
+  where funcApply :: LispVal -> IOEvaled LispVal
+        funcApply (LEnvFunc f) = f env args
+        funcApply v            = mapM (eval env) args >>= apply v
 
 apply :: LispVal -> LIOFunction
 apply (LPrimitiveFunc f)                        args = liftEvaled $ f args
@@ -82,62 +78,30 @@ apply (LLambdaFunc params varargs body closure) args =
     remainingArgs :: [LispVal]
     remainingArgs = drop (length params) args
 
+apply expr _ = throwError . NotFunction "Trying to call non-function" $ show expr
 
-------- Evaluating Conditional Expressions -------
 
-evalIf :: Env -> LispVal -> LispVal -> LispVal -> IOEvaled LispVal
-evalIf env pred conseq alt = fmap unpackBoolCoerce (eval env pred) >>= \bool ->
-  eval env $ if bool then conseq else alt
+------- Environment with all Function Preset Bindings -------
 
-evalCond :: Env -> LIOFunction
-evalCond env = go
+primitiveEnv :: IO Env
+primitiveEnv = emptyEnv >>= (`bindVars` (primFuncs ++ envFuncs ++ ioFuncs))
   where
-    go :: LIOFunction
-    go (LList (LAtom "else":exprs):_)    = evalExprs env exprs
-    go (LList [val, LAtom "=>", func]:_) = case func of
-      LAtom _ -> callFunc env func [val]
-      _       ->
-        throwError . NotFunction "'=>' in 'cond' expects a function" $ show func
+    makeFunc = second
 
-    go (LList [pred]:_)          = eval env pred
-    go (LList (pred:exprs):rest) = fmap unpackBoolCoerce (eval env pred) >>= \bool ->
-      if bool
-        then evalExprs env exprs
-        else go rest
-    go args = throwError $ InvalidArgs "No true condition for 'cond'" args
+    primFuncs :: [(String, LispVal)]
+    primFuncs = map (makeFunc LPrimitiveFunc) primitiveFunctions
 
-evalCase :: Env -> LIOFunction
-evalCase env (keyArg:clauses) = checkCases clauses
-  where
-    checkCases :: LIOFunction
-    checkCases (LList (LAtom "else":exprs):clauses) = evalExprs env exprs
-    checkCases (LList (LList keys  :exprs):clauses) =
-      eval env keyArg >>= (`matchKey` keys) >>= \match ->
-        if match
-          then evalExprs env exprs
-          else checkCases clauses
-    checkCases (_:clauses) = checkCases clauses
-    checkCases [] = throwError $ Default "Exhausted datum matches in 'case'"
+    envFuncs :: [(String, LispVal)]
+    envFuncs = map (makeFunc LEnvFunc) envFunctions
 
-    matchKey :: LispVal -> [LispVal] -> IOEvaled Bool
-    matchKey _   []       = return False
-    matchKey key (v:vals) = eqv [key, v] >>= \(LBool bool) ->
-      if bool then return bool else matchKey key vals
-
-    eqv :: LIOFunction
-    eqv = eval env . LList . (LAtom "eqv?":)
-
-evalCase _ args =
-  throwError $ InvalidArgs "'case' excepts 'key' expression followed by 'clauses'" args
+    ioFuncs :: [(String, LispVal)]
+    ioFuncs = map (makeFunc LIOFunc) ioFunctions
 
 
-{-
- - ------ Environment Interacting Functions -------
- -
- - > functions involving bindings or mutations
- -}
-envFuncs :: [(LFuncName, Env -> LIOFunction)]
-envFuncs =
+------ Environment Interacting Functions -------
+
+envFunctions :: [(LFuncName, Env -> LIOFunction)]
+envFunctions =
   [ ("set!"        , setBang        )
   , ("define"      , define         )
   , ("lambda"      , lambda         )
@@ -145,6 +109,11 @@ envFuncs =
   , ("vector-set!" , vectorSetBang  )
   , ("vector-fill!", vectorFillBang )
   , ("load"        , loadProc       )
+  , ("eq?"         , eqv            )
+  , ("eqv?"        , eqv            )
+  , ("if"          , evalIf         )
+  , ("cond"        , evalCond       )
+  , ("case"        , evalCase       )
   ]
 
 setBang :: Env -> LIOFunction
@@ -223,23 +192,59 @@ vectorFillBang _ args = throwError $ NumArgs 3 args
 
 loadProc :: Env -> LIOFunction
 loadProc env [LString filename] = load filename >>= mapMLast (eval env)
+loadProc _   args               = throwError $ NumArgs 1 args
 
+eqv :: Env -> LIOFunction
+eqv _   [LAtom a, LAtom b] = return . LBool $ a == b
+eqv env args               = mapM (eval env) args >>= liftEvaled . equivalent
 
-------- Environment with both Primitive and IOPrimitive Function Bindings -------
+evalIf :: Env -> LIOFunction
+evalIf env [pred, conseq, alt] = fmap unpackBoolCoerce (eval env pred) >>= \bool ->
+  eval env $ if bool then conseq else alt
+evalIf _   args = throwError $ NumArgs 3 args
 
-primitiveEnv :: IO Env
-primitiveEnv = emptyEnv >>= (`bindVars` (primFuncs ++ ioPrimFuncs))
+evalCond :: Env -> LIOFunction
+evalCond env = go
   where
-    makeFunc = second
+    go :: LIOFunction
+    go (LList (LAtom "else":exprs):_)    = evalExprs env exprs
+    go (LList [val, LAtom "=>", expr]:_) = eval env expr >>= callAsFunc
+      where callAsFunc :: LispVal -> IOEvaled LispVal
+            callAsFunc expr = callFunc env expr [val]
 
-    primFuncs :: [(String, LispVal)]
-    primFuncs = map (makeFunc LPrimitiveFunc) primitiveFuncs
+    go (LList [pred]:_)          = eval env pred
+    go (LList (pred:exprs):rest) = fmap unpackBoolCoerce (eval env pred) >>= \bool ->
+      if bool
+        then evalExprs env exprs
+        else go rest
+    go args = throwError $ InvalidArgs "No true condition for 'cond'" args
 
-    ioPrimFuncs :: [(String, LispVal)]
-    ioPrimFuncs = map (makeFunc LIOFunc) ioPrimitiveFuncs
+evalCase :: Env -> LIOFunction
+evalCase env (keyArg:clauses) = checkCases clauses
+  where
+    checkCases :: LIOFunction
+    checkCases (LList (LAtom "else":exprs):clauses) = evalExprs env exprs
+    checkCases (LList (LList keys  :exprs):clauses) =
+      eval env keyArg >>= (`matchKey` keys) >>= \match ->
+        if match
+          then evalExprs env exprs
+          else checkCases clauses
+    checkCases (_:clauses) = checkCases clauses
+    checkCases [] = throwError $ Default "Exhausted datum matches in 'case'"
 
-ioPrimitiveFuncs :: [(String, LIOFunction)]
-ioPrimitiveFuncs =
+    matchKey :: LispVal -> [LispVal] -> IOEvaled Bool
+    matchKey _   []       = return False
+    matchKey key (v:vals) = eqv env [key, v] >>= \(LBool bool) ->
+      if bool then return bool else matchKey key vals
+
+evalCase _ args =
+  throwError $ InvalidArgs "'case' excepts 'key' expression followed by 'clauses'" args
+
+
+------- IO Primitive Functions -------
+
+ioFunctions :: [(String, LIOFunction)]
+ioFunctions =
   [ ("apply",             applyProc         )
   , ("open-input-file",   makePort ReadMode )
   , ("open-output-file",  makePort WriteMode)
@@ -251,15 +256,14 @@ ioPrimitiveFuncs =
   , ("read-all",          readAll           )
   ]
 
-
-------- IO Primitive Functions -------
-
 applyProc :: LIOFunction
 applyProc [func, LList args] = apply func args
 applyProc (func : args)      = apply func args
+applyProc _                  = throwError $ InvalidArgs "Invalid arguments to 'apply'" []
 
 makePort :: IOMode -> LIOFunction
 makePort mode [LString filename] = LPort <$> liftIO (openFile filename mode)
+makePort _    args               = throwError $ NumArgs 1 args
 
 closePort :: LIOFunction
 closePort [LPort port] = liftIO $  hClose port
@@ -269,17 +273,21 @@ closePort _            = return $ LBool False
 readProc :: LIOFunction
 readProc []           = readProc [LPort stdin]
 readProc [LPort port] = liftIO (hGetLine port) >>= liftEvaled . readExpr
+readProc args         = throwError $ NumArgs 1 args
 
 writeProc :: LIOFunction
 writeProc [obj]             = writeProc [obj, LPort stdout]
 writeProc [obj, LPort port] = liftIO $  hPrint port obj
                                      >> return (LBool True)
+writeProc args              = throwError $ InvalidArgs "Invalid arguments to 'write'" args
 
 readContents :: LIOFunction
 readContents [LString filename] = LString <$> liftIO (readFile filename)
+readContents args               = throwError $ NumArgs 1 args
 
 readAll :: LIOFunction
 readAll [LString filename] = LList <$> load filename
+readAll args               = throwError $ NumArgs 1 args
 
 load :: String -> IOEvaled [LispVal]
 load filename = liftIO (readFile filename) >>= liftEvaled . readExprList

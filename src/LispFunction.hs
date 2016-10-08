@@ -1,4 +1,4 @@
-module LispFunction (primitiveFuncs) where
+module LispFunction (primitiveFunctions, equivalent) where
 
 import Control.Arrow
 import Control.Monad.Except
@@ -14,8 +14,8 @@ import Unpacker
 
 ------- Primitive Function Mapping Tuples -------
 
-primitiveFuncs :: [(String, LFunction)]
-primitiveFuncs =
+primitiveFunctions :: [(String, LFunction)]
+primitiveFunctions =
   [
   -- Numeric Operations
     ("+",         numericBinop (+)  )
@@ -46,8 +46,6 @@ primitiveFuncs =
   , ("string-ci>=?", strBoolBinop (map toLower) (>=) )
   , ("string-ci<?",  strBoolBinop (map toLower) (<)  )
   , ("string-ci>?",  strBoolBinop (map toLower) (>)  )
-  , ("eq?",          eqv               )
-  , ("eqv?",         eqv               )
   , ("equal?",       equal             )
 
   -- Lists/Pairs
@@ -133,45 +131,51 @@ cons badArgList                = throwError $ NumArgs 2 badArgList
 
 ------- Equality Checks -------
 
-eqv :: LFunction
-eqv [LBool arg1,       LBool arg2]       = return . LBool $ arg1 == arg2
-eqv [LChar arg1,       LChar arg2]       = return . LBool $ arg1 == arg2
-eqv [LNumber arg1,     LNumber arg2]     = return . LBool $ arg1 == arg2
-eqv [LString arg1,     LString arg2]     = return . LBool $ arg1 == arg2
-eqv [LAtom arg1,       LAtom arg2]       = return . LBool $ arg1 == arg2
-eqv [LDottedList xs x, LDottedList ys y] = eqv [LList $ xs ++ [x], LList $ ys ++ [y]]
-eqv [LList arg1,       LList arg2]
+equivalent :: LFunction
+equivalent [LMutable _,       _]                = return $ LBool False
+equivalent [_,                LMutable _]       = return $ LBool False
+equivalent [LBool arg1,       LBool arg2]       = return . LBool $ arg1 == arg2
+equivalent [LChar arg1,       LChar arg2]       = return . LBool $ arg1 == arg2
+equivalent [LNumber arg1,     LNumber arg2]     = return . LBool $ arg1 == arg2
+equivalent [LString arg1,     LString arg2]     = return . LBool $ arg1 == arg2
+equivalent [LAtom arg1,       LAtom arg2]       = return . LBool $ arg1 == arg2
+equivalent [LDottedList xs x, LDottedList ys y] =
+  equivalent [LList $ xs ++ [x], LList $ ys ++ [y]]
+equivalent [LList arg1,       LList arg2]
   | length arg1 /= length arg2 = return $ LBool False
   | otherwise                  = return . LBool $ all eqvPair (zip arg1 arg2)
       where
         eqvPair :: (LispVal, LispVal) -> Bool
-        eqvPair (x1, x2) = runEvaled (const False) extractBool $ eqv [x1, x2]
+        eqvPair (x1, x2) = runEvaled (const False) extractBool $ equivalent [x1, x2]
 
         extractBool :: LispVal -> Bool
         extractBool (LBool b) = b
         extractBool _         = False
 
-eqv [_,                _]                = return $ LBool False
-eqv badArgList                           = throwError $ NumArgs 2 badArgList
+equivalent [_, _]     = return $ LBool False
+equivalent badArgList = throwError $ NumArgs 2 badArgList
 
 equal :: LFunction
-equal [LList xs, LList ys] = return . LBool $ listEqual xs ys
-equal [LDottedList xs xlast, LDottedList ys ylast] = do
-  (LBool lastEquals) <- equal [xlast, ylast]
-  if lastEquals
-    then return . LBool $ listEqual xs ys
-    else return $ LBool False
+equal = unwrapMut go
+  where
+    go :: LFunction
+    go [LList xs, LList ys] = return . LBool $ listEqual xs ys
+    go [LDottedList xs xlast, LDottedList ys ylast] = do
+      (LBool lastEquals) <- equal [xlast, ylast]
+      if lastEquals
+        then return . LBool $ listEqual xs ys
+        else return $ LBool False
 
-equal [arg1, arg2] = do
-  primitiveEquals <- or <$> mapM (unpackEquals arg1 arg2)
-                                 [ AnyUnpacker unpackNum
-                                 , AnyUnpacker (unpackStr id)
-                                 , AnyUnpacker unpackBool
-                                 ]
+    go [arg1, arg2] = do
+      primitiveEquals <- or <$> mapM (unpackEquals arg1 arg2)
+                                     [ AnyUnpacker unpackNum
+                                     , AnyUnpacker (unpackStr id)
+                                     , AnyUnpacker unpackBool
+                                     ]
 
-  eqvEquals <- eqv [arg1, arg2]
-  return . LBool $ (primitiveEquals || let (LBool x) = eqvEquals in x)
-equal badArgList   = throwError $ NumArgs 2 badArgList
+      eqvEquals <- equivalent [arg1, arg2]
+      return . LBool $ (primitiveEquals || let (LBool x) = eqvEquals in x)
+    go badArgList   = throwError $ NumArgs 2 badArgList
 
 listEqual :: [LispVal] -> [LispVal] -> Bool
 listEqual xs ys
@@ -181,6 +185,7 @@ listEqual xs ys
             equalPair (x, y) = runEvaled (const False)
                                          unpackBoolCoerce
                                          (equal [x, y])
+
 
 ------- Type Testing -------
 
@@ -303,3 +308,9 @@ listToVector args         = throwError $ NumArgs 1 args
 
 allM :: (Foldable t, Monad m) => (a -> m Bool) -> t a -> m Bool
 allM f = foldrM (\a b -> (b &&) <$> f a) True
+
+unwrapMut :: LFunction -> LFunction
+unwrapMut f args = f $ map unwrap args
+  where unwrap :: LispVal -> LispVal
+        unwrap (LMutable a) = a
+        unwrap a            = a

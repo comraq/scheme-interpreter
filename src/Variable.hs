@@ -108,7 +108,6 @@ trapError :: MonadError LispError m => m String -> m String
 trapError action = catchError action $ return . show
 
 
-
 ------- Helper Functions to Create LispErrors -------
 
 bindingNotFound :: String -> LispError

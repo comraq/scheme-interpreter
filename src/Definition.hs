@@ -2,15 +2,18 @@ module Definition
   ( LispVal(..)
   , SchemeNumber(..)
   , LispError(..)
+
   , SVector
   , VarName
   , VarBinding
   , LFuncName
   , LFunction
-  , LIOFunction
+
   , Env
   , Evaled
   , IOEvaled
+
+  , LIOFunction
   ) where
 
 import Control.Arrow
@@ -26,17 +29,15 @@ import Text.Parsec.Error
 
 ------- Type Synonyms ------
 
-type SVector     = Array Int
-type VarName     = String
-type VarBinding  = (VarName, IORef LispVal)
-type Env         = IORef [VarBinding]
-type IOEvaled    = ExceptT LispError IO
-type Evaled a    = Except LispError a
-type LFuncName   = String
-type LFunction   = [LispVal] -> Evaled LispVal
-type LIOFunction = [LispVal] -> IOEvaled LispVal
-
-
+type SVector      = Array Int
+type VarName      = String
+type VarBinding   = (VarName, IORef LispVal)
+type Env          = IORef [VarBinding]
+type IOEvaled     = ExceptT LispError IO
+type Evaled a     = Except LispError a
+type LFuncName    = String
+type LFunction    = [LispVal] -> Evaled LispVal
+type LIOFunction  = [LispVal] -> IOEvaled LispVal
 
 
 ------- Type Definitions -------
@@ -60,6 +61,7 @@ data LispVal = LAtom          String
                               }
 
              | LIOFunc        LIOFunction
+             | LEnvFunc       (Env -> LIOFunction)
              | LPort          Handle
 
 data SchemeNumber = SInt      Integer
@@ -113,6 +115,7 @@ showVal (LLambdaFunc args varargs body env) =
 
 showVal (LIOFunc _)                         = "<IO primitive>"
 showVal (LPort _)                           = "<IO port>"
+showVal (LEnvFunc _)                        = "<env primitive>"
 
 unwordsList :: [LispVal] -> String
 unwordsList = unwords . map showVal
@@ -296,7 +299,7 @@ showError (UnboundVar     message  varname) = message ++ ": " ++ varname
 showError (BadSpecialForm message  form)    = message ++ ": " ++ show form
 showError (NotFunction    message  func)    = message ++ ": " ++ show func
 showError (NumArgs        expected found)   =
-  "Expected " ++ show expected ++ " args: found values " ++ unwordsList found
+  "Expected " ++ show expected ++ " args: found values [" ++ unwordsList found ++ "]"
 showError (TypeMismatch   expected found)   =
   "Invalid type: expected " ++ expected ++ ", found " ++ show found
 showError (ParserErr      parseErr)         =
