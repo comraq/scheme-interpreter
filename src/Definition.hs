@@ -38,8 +38,6 @@ type VarName      = String
 type VarBinding   = M.Map VarName LispVal
 type Env          = IORef VarBinding
 type PtrVal       = IORef LispVal
--- type VarBinding   = (VarName, PtrName)
--- type Env          = IORef [VarBinding]
 type IOEvaled     = ExceptT LispError IO
 type Evaled a     = Except LispError a
 type LFuncName    = String
@@ -58,7 +56,7 @@ data LispVal = LAtom          String
              | LChar          Char
              | LVector        (SVector LispVal)
              | LPointer       PtrVal
-             | LPrimitiveFunc LFunction
+             | LPrimitiveFunc LFuncName LFunction
 
              -- Constructor for user defined functions
              | LLambdaFunc    { params  :: [String]     -- parameter names
@@ -67,8 +65,8 @@ data LispVal = LAtom          String
                               , closure :: Env          -- the environment which the function encloses over
                               }
 
-             | LIOFunc        LIOFunction
-             | LEnvFunc       (Env -> LIOFunction)
+             | LIOFunc        LFuncName LIOFunction
+             | LEnvFunc       LFuncName (Env -> LIOFunction)
              | LPort          Handle
 
 data SchemeNumber = SInt      Integer
@@ -97,17 +95,27 @@ instance Eq LispVal where
   (==) = equivalent
 
 equivalent :: LispVal -> LispVal -> Bool
-equivalent (LPointer p1)      (LPointer p2)      = p1 == p2
 equivalent (LBool arg1)       (LBool arg2)       = arg1 == arg2
 equivalent (LChar arg1)       (LChar arg2)       = arg1 == arg2
 equivalent (LNumber arg1)     (LNumber arg2)     = arg1 == arg2
 equivalent (LString arg1)     (LString arg2)     = arg1 == arg2
 equivalent (LAtom arg1)       (LAtom arg2)       = arg1 == arg2
+
+equivalent (LPointer p1)      (LPointer p2)      = p1 == p2
+equivalent (LPort p1)         (LPort p2)         = p1 == p2
+
+equivalent (LPrimitiveFunc name1 _) (LPrimitiveFunc name2 _)  = name1 == name2
+equivalent (LIOFunc        name1 _) (LIOFunc        name2 _)  = name1 == name2
+equivalent (LEnvFunc       name1 _) (LEnvFunc       name2 _)  = name1 == name2
+equivalent (LLambdaFunc a b c d)    (LLambdaFunc a' b' c' d') =
+  a == a' && b == b' && c == c' && d == d'
+
 equivalent (LDottedList xs x) (LDottedList ys y) =
   equivalent x y && equivalent (LList xs) (LList ys)
 equivalent (LList arg1)       (LList arg2)
     | length arg1 /= length arg2 = False
     | otherwise                  = all (uncurry equivalent) $ zip arg1 arg2
+
 equivalent _ _                                   = False
 
 showVal :: LispVal -> String
@@ -115,7 +123,6 @@ showVal (LString contents)      = "\"" ++ contents ++ "\""
 showVal (LChar c)               = [c]
 showVal (LAtom name)            = name
 showVal (LNumber contents)      = show contents
-showVal (LPointer _)            = error "TODO: Trying to show pointer value!"
 showVal (LBool bool)            = showLBool bool
   where
     showLBool :: Bool -> String
@@ -129,7 +136,9 @@ showVal (LVector vec)           = "#(" ++ showSVec vec ++ ")"
   where showSVec :: SVector LispVal -> String
         showSVec = unwordsList . elems
 
-showVal (LPrimitiveFunc _)                  = "<primitive>"
+showVal (LPrimitiveFunc name _)             = "<procedure:" ++ name ++ ">"
+showVal (LIOFunc name _)                    = "<procedure:" ++ name ++ ">"
+showVal (LEnvFunc name _)                   = "<procedure:" ++ name ++ ">"
 showVal (LLambdaFunc args varargs body env) =
   "(lambda (" ++ unwords (map show args)
               ++ (case varargs of
@@ -137,9 +146,9 @@ showVal (LLambdaFunc args varargs body env) =
                     Just arg -> " . " ++ arg)
               ++ ") ...)"
 
-showVal (LIOFunc _)                         = "<IO primitive>"
-showVal (LPort _)                           = "<IO port>"
-showVal (LEnvFunc _)                        = "<env primitive>"
+
+showVal (LPointer _) = error "TODO: Trying to show pointer value!"
+showVal (LPort _)    = "<IO port>"
 
 unwordsList :: [LispVal] -> String
 unwordsList = unwords . map showVal

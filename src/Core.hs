@@ -1,21 +1,19 @@
-module Evaluator (eval, primitiveEnv) where
+module Core (eval, primitiveEnv) where
 
-import Control.Arrow
+import Control.Arrow ((&&&))
 import Control.Monad.Except
 import Data.Array.MArray (thaw)
 import Data.Array.ST (runSTArray)
 import Data.Maybe (fromMaybe, isNothing)
-import System.IO
 
 import Definition
-import LispFunction
+import IOFunction
+import PrimFunction
 import LispVector (vectorSet, vectorFill, vectorLength)
 import Parser
 import Variable
 import Unpacker (unpackBoolCoerce)
 
-
-type LFuncParams = [LispVal]
 
 eval :: Env -> LispVal -> IOEvaled LispVal
 eval env expr = evalDeep env expr >>= evalIfPtr
@@ -64,12 +62,13 @@ callFunc :: Env -> LispVal -> LIOFunction
 callFunc env func args = evalDeep env func >>= funcApply
   where
     funcApply :: LispVal -> IOEvaled LispVal
-    funcApply (LEnvFunc f) = f env args
-    funcApply v            = mapM (eval env) args >>= apply v
+    funcApply (LEnvFunc _ f)   = f env args
+    funcApply f@LLambdaFunc {} = mapM (evalOnce env) args >>= apply f
+    funcApply f                = mapM (eval env) args >>= apply f
 
 apply :: LispVal -> LIOFunction
-apply (LPrimitiveFunc f)                        args = liftEvaled $ f args
-apply (LIOFunc f)                               args = f args
+apply (LPrimitiveFunc _ f)                      args = liftEvaled $ f args
+apply (LIOFunc _ f)                             args = f args
 apply (LLambdaFunc params varargs body closure) args =
   if num params /= num args && isNothing varargs
     then throwError $ NumArgs (num params) args
@@ -100,7 +99,10 @@ apply expr _ = throwError . NotFunction "Trying to call non-function" $ show exp
 primitiveEnv :: IO Env
 primitiveEnv = emptyEnv >>= (`bindVars` (primFuncs ++ envFuncs ++ ioFuncs))
   where
-    makeFunc = second
+    makeFunc :: (LFuncName -> func -> LispVal)
+             -> (LFuncName, func)
+             -> (LFuncName, LispVal)
+    makeFunc f = fst &&& uncurry f
 
     primFuncs :: [(String, LispVal)]
     primFuncs = map (makeFunc LPrimitiveFunc) primitiveFunctions
@@ -129,6 +131,7 @@ envFunctions =
 
   , ("eq?"         , eqv            )
   , ("eqv?"        , eqv            )
+  , ("apply"       , applyProc      )
   ]
 
 setBang :: Env -> LIOFunction
@@ -251,9 +254,6 @@ evalCase env (keyArg:clauses) = checkCases clauses
     matchKey key (v:vals) = eqv env [key, v] >>= \(LBool bool) ->
       if bool then return bool else matchKey key vals
 
-    eqv :: Env -> LIOFunction
-    eqv env = evalDeep env . LList . (LAtom "eqv?":)
-
 evalCase _ args =
   throwError $ InvalidArgs "'case' excepts 'key' expression followed by 'clauses'" args
 
@@ -262,96 +262,12 @@ eqv env [arg1, arg2] = do
   a <- evalOnce env arg1
   b <- evalOnce env arg2
   return . LBool $ a == b
+eqv _   args         = throwError $ NumArgs 2 args
 
-
-------- IO Primitive Functions -------
-
-ioFunctions :: [(String, LIOFunction)]
-ioFunctions =
-  [ ("apply"            , applyProc         )
-  , ("open-input-file"  , makePort ReadMode )
-  , ("open-output-file" , makePort WriteMode)
-  , ("close-input-port" , closePort         )
-  , ("close-output-port", closePort         )
-  , ("read"             , readProc          )
-  , ("write"            , writeProc         )
-  , ("read-contents"    , readContents      )
-  , ("read-all"         , readAll           )
-
-  , ("make-string"      , makeString        )
-  , ("substring"        , substring         )
-  , ("string-append"    , stringAppend      )
-  , ("list->string"     , listToString      )
-  ]
-
-applyProc :: LIOFunction
-applyProc [func, LList args] = apply func args
-applyProc (func : args)      = apply func args
-applyProc _                  = throwError $ InvalidArgs "Invalid arguments to 'apply'" []
-
-makePort :: IOMode -> LIOFunction
-makePort mode [LString filename] = LPort <$> liftIO (openFile filename mode)
-makePort _    args               = throwError $ NumArgs 1 args
-
-closePort :: LIOFunction
-closePort [LPort port] = liftIO $  hClose port
-                                >> return (LBool True)
-closePort _            = return $ LBool False
-
-readProc :: LIOFunction
-readProc []           = readProc [LPort stdin]
-readProc [LPort port] = liftIO (hGetLine port) >>= liftEvaled . readExpr
-readProc args         = throwError $ NumArgs 1 args
-
-writeProc :: LIOFunction
-writeProc [obj]             = writeProc [obj, LPort stdout]
-writeProc [obj, LPort port] = liftIO $  hPrint port obj
-                                     >> return (LBool True)
-writeProc args              = throwError $ InvalidArgs "Invalid arguments to 'write'" args
-
-readContents :: LIOFunction
-readContents [LString filename] = LString <$> liftIO (readFile filename)
-readContents args               = throwError $ NumArgs 1 args
-
-readAll :: LIOFunction
-readAll [LString filename] = LList <$> load filename
-readAll args               = throwError $ NumArgs 1 args
-
-makeString :: LIOFunction
-makeString args = case args of
-    [LNumber n]          -> mkStr (fromIntegral n, ' ')
-    [LNumber n, LChar c] -> mkStr (fromIntegral n, c)
-    _                    -> throwError $ NumArgs 1 args
-
-  where mkStr :: (Int, Char) -> IOEvaled LispVal
-        mkStr = liftIO . toPtrVal . LString . uncurry replicate
-
-substring :: LIOFunction
-substring [LString str, LNumber start, LNumber end] =
-  let startI = fromIntegral $ toInteger start
-      sublen = fromIntegral (toInteger end) - startI
-  in  liftIO . toPtrVal . LString . take sublen . drop startI $ str
-substring args = throwError $ NumArgs 3 args
-
-stringAppend :: LIOFunction
-stringAppend args = go args >>= liftIO . toPtrVal
-  where go :: LIOFunction
-        go []               = return $ LString ""
-        go (LString s:strs) = (\(LString s') -> LString $ s ++ s') <$> go strs
-        go args             = throwError $ InvalidArgs "Expected string list" args
-
-listToString :: LIOFunction
-listToString [LList vals] = toString vals >>= liftIO . toPtrVal . LString
-  where toString :: [LispVal] -> IOEvaled String
-        toString []            = return ""
-        toString (LChar c:lvs) = (c:) <$> toString lvs
-        toString args          = throwError $ InvalidArgs "Expected a char list" args
-listToString args         = throwError $ InvalidArgs "Expected a char list" args
-
-
-
-load :: String -> IOEvaled [LispVal]
-load filename = liftIO (readFile filename) >>= liftEvaled . readExprList
+applyProc :: Env -> LIOFunction
+applyProc env [func, LList args] = callFunc env func args
+applyProc env (func : args)      = callFunc env func args
+applyProc _   _                  = throwError $ InvalidArgs "Invalid arguments to 'apply'" []
 
 
 ------- Utility Functions -------
@@ -363,14 +279,14 @@ load filename = liftIO (readFile filename) >>= liftEvaled . readExprList
 evalExprs :: Env -> LIOFunction
 evalExprs env = mapMLast (evalDeep env)
 
-makeFunc :: Maybe String -> Env -> LFuncParams -> LIOFunction
+makeFunc :: Maybe String -> Env -> [LispVal] -> LIOFunction
 makeFunc varargs env params body =
-  return $ LLambdaFunc (map show params) varargs body env
+  liftIO . toPtrVal $ LLambdaFunc (map show params) varargs body env
 
-makeNormalFunc :: Env -> LFuncParams -> LIOFunction
+makeNormalFunc :: Env -> [LispVal] -> LIOFunction
 makeNormalFunc = makeFunc Nothing
 
-makeVarargs :: LispVal -> Env -> LFuncParams -> LIOFunction
+makeVarargs :: LispVal -> Env -> [LispVal] -> LIOFunction
 makeVarargs = makeFunc . Just . show
 
 mapMLast :: Monad m => (a -> m b) -> [a] -> m b

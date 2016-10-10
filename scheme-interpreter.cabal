@@ -15,10 +15,11 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Definition
-                     , Evaluator
-                     , LispFunction
+  exposed-modules:     Core
+                     , Definition
+                     , IOFunction
                      , LispVector
+                     , PrimFunction
                      , Parser
                      , Unpacker
                      , Variable

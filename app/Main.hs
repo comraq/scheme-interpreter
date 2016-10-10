@@ -9,7 +9,7 @@ import System.Environment
 import System.IO
 
 import Definition
-import Evaluator (eval, primitiveEnv)
+import Core (eval, primitiveEnv)
 import Parser (readExpr)
 import Variable (liftEvaled, runIOEvaledSafe, bindVars)
 

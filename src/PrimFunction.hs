@@ -1,6 +1,5 @@
-module LispFunction (primitiveFunctions) where
+module PrimFunction (primitiveFunctions) where
 
-import Control.Arrow
 import Control.Monad.Except
 import Data.Array.ST (runSTArray)
 import Data.Char (toLower)
