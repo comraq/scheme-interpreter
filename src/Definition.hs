@@ -4,12 +4,14 @@ module Definition
   , LispError(..)
 
   , SVector
+  , PtrName
+  , PtrVal
   , VarName
   , VarBinding
+  , Env
   , LFuncName
   , LFunction
 
-  , Env
   , Evaled
   , IOEvaled
 
@@ -22,6 +24,7 @@ import Control.Monad.State
 import Data.Array
 import Data.Complex
 import Data.IORef
+import qualified Data.Map as M
 import Data.Ratio
 import System.IO
 import Text.Parsec.Error
@@ -30,9 +33,13 @@ import Text.Parsec.Error
 ------- Type Synonyms ------
 
 type SVector      = Array Int
+type PtrName      = String
 type VarName      = String
-type VarBinding   = (VarName, IORef LispVal)
-type Env          = IORef [VarBinding]
+type VarBinding   = M.Map VarName LispVal
+type Env          = IORef VarBinding
+type PtrVal       = IORef LispVal
+-- type VarBinding   = (VarName, PtrName)
+-- type Env          = IORef [VarBinding]
 type IOEvaled     = ExceptT LispError IO
 type Evaled a     = Except LispError a
 type LFuncName    = String
@@ -50,7 +57,7 @@ data LispVal = LAtom          String
              | LBool          Bool
              | LChar          Char
              | LVector        (SVector LispVal)
-             | LMutable       LispVal
+             | LPointer       PtrVal
              | LPrimitiveFunc LFunction
 
              -- Constructor for user defined functions
@@ -86,12 +93,29 @@ data LispError = NumArgs        Int        [LispVal]
 instance Show LispVal where
   show = showVal
 
+instance Eq LispVal where
+  (==) = equivalent
+
+equivalent :: LispVal -> LispVal -> Bool
+equivalent (LPointer p1)      (LPointer p2)      = p1 == p2
+equivalent (LBool arg1)       (LBool arg2)       = arg1 == arg2
+equivalent (LChar arg1)       (LChar arg2)       = arg1 == arg2
+equivalent (LNumber arg1)     (LNumber arg2)     = arg1 == arg2
+equivalent (LString arg1)     (LString arg2)     = arg1 == arg2
+equivalent (LAtom arg1)       (LAtom arg2)       = arg1 == arg2
+equivalent (LDottedList xs x) (LDottedList ys y) =
+  equivalent x y && equivalent (LList xs) (LList ys)
+equivalent (LList arg1)       (LList arg2)
+    | length arg1 /= length arg2 = False
+    | otherwise                  = all (uncurry equivalent) $ zip arg1 arg2
+equivalent _ _                                   = False
+
 showVal :: LispVal -> String
 showVal (LString contents)      = "\"" ++ contents ++ "\""
 showVal (LChar c)               = [c]
 showVal (LAtom name)            = name
 showVal (LNumber contents)      = show contents
-showVal (LMutable val)          = show val
+showVal (LPointer _)            = error "TODO: Trying to show pointer value!"
 showVal (LBool bool)            = showLBool bool
   where
     showLBool :: Bool -> String

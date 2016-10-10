@@ -24,6 +24,7 @@ library
                      , Variable
   build-depends:       base >= 4.7 && < 5
                      , array
+                     , containers
                      , haskeline
                      , mtl
                      , parsec

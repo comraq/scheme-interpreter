@@ -1,4 +1,4 @@
-module LispFunction (primitiveFunctions, equivalent) where
+module LispFunction (primitiveFunctions) where
 
 import Control.Arrow
 import Control.Monad.Except
@@ -64,13 +64,9 @@ primitiveFunctions =
   , ("string->symbol", stringToAtom )
 
   -- String Functions
-  , ("make-string",   makeString   )
   , ("string-length", stringLength )
   , ("string-ref",    stringRef    )
-  , ("string-append", stringAppend )
   , ("string->list",  stringToList )
-  , ("list->string",  listToString )
-  , ("substring",     substring    )
 
   -- Vector Functions,
   , ("vector",        vector       )
@@ -131,32 +127,8 @@ cons badArgList                = throwError $ NumArgs 2 badArgList
 
 ------- Equality Checks -------
 
-equivalent :: LFunction
-equivalent [LMutable _,       _]                = return $ LBool False
-equivalent [_,                LMutable _]       = return $ LBool False
-equivalent [LBool arg1,       LBool arg2]       = return . LBool $ arg1 == arg2
-equivalent [LChar arg1,       LChar arg2]       = return . LBool $ arg1 == arg2
-equivalent [LNumber arg1,     LNumber arg2]     = return . LBool $ arg1 == arg2
-equivalent [LString arg1,     LString arg2]     = return . LBool $ arg1 == arg2
-equivalent [LAtom arg1,       LAtom arg2]       = return . LBool $ arg1 == arg2
-equivalent [LDottedList xs x, LDottedList ys y] =
-  equivalent [LList $ xs ++ [x], LList $ ys ++ [y]]
-equivalent [LList arg1,       LList arg2]
-  | length arg1 /= length arg2 = return $ LBool False
-  | otherwise                  = return . LBool $ all eqvPair (zip arg1 arg2)
-      where
-        eqvPair :: (LispVal, LispVal) -> Bool
-        eqvPair (x1, x2) = runEvaled (const False) extractBool $ equivalent [x1, x2]
-
-        extractBool :: LispVal -> Bool
-        extractBool (LBool b) = b
-        extractBool _         = False
-
-equivalent [_, _]     = return $ LBool False
-equivalent badArgList = throwError $ NumArgs 2 badArgList
-
 equal :: LFunction
-equal = unwrapMut go
+equal = go
   where
     go :: LFunction
     go [LList xs, LList ys] = return . LBool $ listEqual xs ys
@@ -172,9 +144,8 @@ equal = unwrapMut go
                                      , AnyUnpacker (unpackStr id)
                                      , AnyUnpacker unpackBool
                                      ]
+      return . LBool $ primitiveEquals || (arg1 == arg2)
 
-      eqvEquals <- equivalent [arg1, arg2]
-      return . LBool $ (primitiveEquals || let (LBool x) = eqvEquals in x)
     go badArgList   = throwError $ NumArgs 2 badArgList
 
 listEqual :: [LispVal] -> [LispVal] -> Bool
@@ -223,17 +194,7 @@ stringToAtom vals        = throwError $ NumArgs 1 vals
 
 ------- String Functions -------
 
-makeString :: LFunction
-makeString args = case args of
-    [LNumber n]          -> mkStr (fromIntegral n, ' ')
-    [LNumber n, LChar c] -> mkStr (fromIntegral n, c)
-    _                    -> throwError $ NumArgs 1 args
-
-  where mkStr :: (Int, Char) -> Evaled LispVal
-        mkStr = return . LMutable . LString . uncurry replicate
-
 stringLength :: LFunction
-stringLength (LMutable v:vs) = stringLength $ v:vs
 stringLength [LString s]     = return . LNumber . SInt . toInteger $ length s
 stringLength args            = throwError $ NumArgs 1 args
 
@@ -245,33 +206,10 @@ stringRef [LString s, LNumber n] =
         else throwError $ InvalidArgs "Index is longer than string" [LString s, LNumber n]
 stringRef args = throwError $ NumArgs 2 args
 
-substring :: LFunction
-substring (LMutable v:vs) = substring $ v:vs
-substring [LString str, LNumber start, LNumber end] =
-  let startI = fromIntegral $ toInteger start
-      sublen = fromIntegral (toInteger end) - startI
-  in  return . LMutable . LString . take sublen . drop startI $ str
-substring args = throwError $ NumArgs 3 args
-
-stringAppend :: LFunction
-stringAppend []               = return . LMutable $ LString ""
-stringAppend (LMutable v:vs)  = stringAppend $ v:vs
-stringAppend (LString s:strs) = (\(LMutable (LString s')) -> LMutable . LString $ s ++ s') <$> stringAppend strs
-stringAppend args             = throwError $ InvalidArgs "Expected string list" args
-
+-- TODO: Need to return mutable LPointer list
 stringToList :: LFunction
-stringToList (LMutable v:vs) = stringToList $ v:vs
-stringToList [LString s]     = return . LMutable . LList $ map LChar s
+stringToList [LString s]     = return . LList $ map LChar s
 stringToList args            = throwError $ InvalidArgs "Expected string" args
-
-listToString :: LFunction
-listToString (LMutable v:vs)  = listToString $ v:vs
-listToString [LList lispvals] = LString <$> toString lispvals
-  where toString :: [LispVal] -> Evaled String
-        toString []            = return ""
-        toString (LChar c:lvs) = (c:) <$> toString lvs
-        toString args          = throwError $ InvalidArgs "Expected a char list" args
-listToString args             = throwError $ InvalidArgs "Expected a char list" args
 
 
 ------- Vector Functions -------
@@ -308,9 +246,3 @@ listToVector args         = throwError $ NumArgs 1 args
 
 allM :: (Foldable t, Monad m) => (a -> m Bool) -> t a -> m Bool
 allM f = foldrM (\a b -> (b &&) <$> f a) True
-
-unwrapMut :: LFunction -> LFunction
-unwrapMut f args = f $ map unwrap args
-  where unwrap :: LispVal -> LispVal
-        unwrap (LMutable a) = a
-        unwrap a            = a

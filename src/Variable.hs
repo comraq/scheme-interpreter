@@ -10,15 +10,25 @@ module Variable
   , trapError
   , runEvaled
   , bindingNotFound
+
   , getVar
+  , getVarDeep
+
   , setVar
   , defineVar
   , bindVars
+
+  , readPtrVal
+  , modifyPtrVal
+  , toPtrVal
+
+  , isBound
   ) where
 
 import Control.Monad.Except
 import Data.IORef
-import Data.Maybe (isJust)
+import qualified Data.Map as M
+import Data.Maybe (fromMaybe)
 
 import Definition
 
@@ -30,7 +40,7 @@ import Definition
  -   writeIORef :: IORef a -> a -> IO ()
  -}
 emptyEnv :: IO Env
-emptyEnv = newIORef []
+emptyEnv = newIORef M.empty
 
 liftEvaled :: Evaled a -> IOEvaled a
 liftEvaled = either throwError return . runExcept
@@ -47,7 +57,11 @@ runIOEvaledSafe = runIOEvaled undefined id . trapError
 
 -- Check if a variable has a binding in the environment
 isBound :: Env -> VarName -> IO Bool
-isBound envRef var = isJust . lookup var <$> readIORef envRef
+isBound env var = M.member var <$> readIORef env
+
+readPtrVal :: LispVal -> IOEvaled LispVal
+readPtrVal (LPointer ptrVal) = liftIO $ readIORef ptrVal
+readPtrVal val               = throwError $ ImmutableArg "Not pointer value" val
 
 {-
  - Gets the variable from the environment
@@ -59,53 +73,68 @@ isBound envRef var = isJust . lookup var <$> readIORef envRef
  -   - 'UnboundVar' error otherwise
  -}
 getVar :: Env -> VarName -> IOEvaled LispVal
-getVar envRef var = do
-  env <- liftIO $ readIORef envRef
-  maybe (throwError $ bindingNotFound var)
-        (liftIO . readIORef)
-        (lookup var env)
+getVar env var = do
+    vars <- liftIO $ readIORef env
+    fromMap notFoundErr var vars
+  where notFoundErr :: LispError
+        notFoundErr = bindingNotFound var
+
+getVarDeep :: Env -> VarName -> IOEvaled LispVal
+getVarDeep env var = do
+    vars    <- liftIO $ readIORef env
+    lispVal <- fromMap notFoundErr var vars
+    case lispVal of
+      LPointer ptr -> liftIO $ readIORef ptr
+      _            -> return lispVal
+
+  where notFoundErr :: LispError
+        notFoundErr = bindingNotFound var
 
 setVar :: Env -> VarName -> LispVal -> IOEvaled LispVal
-setVar envRef var value = do
-  env <- liftIO $ readIORef envRef
-  maybe (throwError $ UnboundVar "Setting an unbound variable" var)
-        (liftIO . (`writeIORef` value))
-        (lookup var env)
+setVar env var value = do
+    defined <- liftIO $ isBound env var
+    if defined
+      then liftIO $ env `modifyIORef` M.insert var value
+      else throwError undefinedErr
 
-  -- Returns the set value for convenience
-  return value
+    -- Returns the set value for convenience
+    return value
 
-{-
- - Note: If var binding is not previously defined:
- -       - creates a 'IO' action
- -       - create new 'IORef' for the value to be defined with
- -       - read the current environment
- -       - write the "(var binding, value IORef)" pair into environment
- -       - lift plain 'IO' action back into the monad transformer stack
- -}
+  where undefinedErr :: LispError
+        undefinedErr = UnboundVar "Setting an unbound variable" var
+
+modifyPtrVal :: (LispVal -> IOEvaled LispVal) -> LispVal -> IOEvaled LispVal
+modifyPtrVal f (LPointer ptr) = do
+  oldVal <- liftIO $ readIORef ptr
+  newVal <- f oldVal
+  liftIO $ writeIORef ptr newVal
+  return newVal
+modifyPtrVal _ val = throwError $ ImmutableArg "Modifying non-mutable value" val
+
 defineVar :: Env -> VarName -> LispVal -> IOEvaled LispVal
-defineVar envRef var value = do
-  alreadyDefined <- liftIO $ isBound envRef var
-  if alreadyDefined
-    then setVar envRef var value
-    else liftIO $ do
-      valueRef <- newIORef value
-      env      <- readIORef envRef
-      writeIORef envRef $ (var, valueRef):env
-      return value
+defineVar env var value =
+  liftIO $ env `modifyIORef` M.insert var value >> return value
 
 bindVars :: Env -> [(VarName, LispVal)] -> IO Env
-bindVars envRef bindings = readIORef envRef >>= extendEnv bindings >>= newIORef
-  where extendEnv :: [(VarName, LispVal)]
-                  -> [VarBinding]
-                  -> IO [VarBinding]
-        extendEnv bindings env = (++ env) <$> mapM addBinding bindings
+bindVars env bindings = modifyIORef env extendEnv >> return env
+  where
+    extendEnv :: M.Map VarName LispVal -> M.Map VarName LispVal
+    extendEnv envMap = foldr addToMap envMap bindings
 
-        addBinding :: (VarName, LispVal) -> IO VarBinding
-        addBinding (var, value) = (var,) <$> newIORef value
+    addToMap :: Ord k => (k, v) -> M.Map k v -> M.Map k v
+    addToMap = uncurry M.insert
+
+toPtrVal :: LispVal -> IO LispVal
+toPtrVal = fmap LPointer . newIORef
 
 trapError :: MonadError LispError m => m String -> m String
 trapError action = catchError action $ return . show
+
+
+------- Utility Functions to work with Map with LispErrors -------
+
+fromMap :: Ord k => LispError -> k -> M.Map k v -> IOEvaled v
+fromMap err key mmap = maybe (throwError err) return $ M.lookup key mmap
 
 
 ------- Helper Functions to Create LispErrors -------
