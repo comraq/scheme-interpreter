@@ -15,20 +15,23 @@ load filename = liftIO (readFile filename) >>= liftEvaled . readExprList
 
 ioFunctions :: [(String, LIOFunction)]
 ioFunctions =
-  [ --("apply"            , applyProc         )
-    ("open-input-file"  , makePort ReadMode )
-  , ("open-output-file" , makePort WriteMode)
-  , ("close-input-port" , closePort         )
-  , ("close-output-port", closePort         )
-  , ("read"             , readProc          )
-  , ("write"            , writeProc         )
-  , ("read-contents"    , readContents      )
-  , ("read-all"         , readAll           )
+  [
+  -- Primitive IO Functions
+    ("open-input-file"  , makePort ReadMode  )
+  , ("open-output-file" , makePort WriteMode )
+  , ("close-input-port" , closePort          )
+  , ("close-output-port", closePort          )
+  , ("read"             , readProc           )
+  , ("write"            , writeProc          )
+  , ("read-contents"    , readContents       )
+  , ("read-all"         , readAll            )
 
-  , ("make-string"      , makeString        )
-  , ("substring"        , substring         )
-  , ("string-append"    , stringAppend      )
-  , ("list->string"     , listToString      )
+  -- String Functions
+  , ("make-string"      , makeString         )
+  , ("substring"        , substring          )
+  , ("string-append"    , stringAppend       )
+  , ("list->string"     , listToString       )
+  , ("string->list"     , stringToList       )
   ]
 
 makePort :: IOMode -> LIOFunction
@@ -89,3 +92,7 @@ listToString [LList vals] = toString vals >>= liftIO . toPtrVal . LString
         toString (LChar c:lvs) = (c:) <$> toString lvs
         toString args          = throwError $ InvalidArgs "Expected a char list" args
 listToString args         = throwError $ InvalidArgs "Expected a char list" args
+
+stringToList :: LIOFunction
+stringToList [LString s] = liftIO . toPtrVal . LList $ map LChar s
+stringToList args        = throwError $ InvalidArgs "Expected string" args

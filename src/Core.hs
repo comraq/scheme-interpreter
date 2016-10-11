@@ -24,9 +24,13 @@ eval env expr = evalDeep env expr >>= evalIfPtr
 
 evalDeep :: Env -> LispVal -> IOEvaled LispVal
 evalDeep env (LAtom var)           = getVarDeep env var
+evalDeep _   var@(LNumber _)       = return var
+evalDeep _   var@(LString _)       = return var
+evalDeep _   var@(LBool _)         = return var
+evalDeep _   var@(LChar _)         = return var
+
 evalDeep env var@(LPointer _)      = readPtrVal var
-evalDeep env (LDottedList lvs lst) = LDottedList <$> mapM (evalDeep env) lvs <*> evalDeep env lst
-evalDeep env (LVector lvs)         = LVector <$> mapM (evalDeep env) lvs
+
 evalDeep env val@(LList lvs)       = case lvs of
 
   -- Special Lists
@@ -34,12 +38,12 @@ evalDeep env val@(LList lvs)       = case lvs of
   (LAtom "quasiquote": vs) -> LList <$> sequence (evalUnquoted env vs)
 
   -- Eval as a Function
-  (LAtom func : args) -> callFunc env (LAtom func) args
+  (func : args) -> callFunc env func args
 
-  -- Normal List
-  _ -> LList <$> mapM (evalDeep env) lvs
+evalDeep _   var@(LDottedList _ _) = throwError $ BadSpecialForm "Must be a proper list" var
+evalDeep env (LVector lvs)         = LVector <$> mapM (evalDeep env) lvs
 
-evalDeep _   val                   = return val
+evalDeep _   badForm               = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 evalOnce :: Env -> LispVal -> IOEvaled LispVal
 evalOnce env (LAtom var)      = getVar env var
@@ -69,12 +73,20 @@ callFunc env func args = evalDeep env func >>= funcApply
 apply :: LispVal -> LIOFunction
 apply (LPrimitiveFunc _ f)                      args = liftEvaled $ f args
 apply (LIOFunc _ f)                             args = f args
-apply (LLambdaFunc params varargs body closure) args =
-  if num params /= num args && isNothing varargs
-    then throwError $ NumArgs (num params) args
-    else (liftIO . bindVars closure $ zip params args) -- Binds param names and function args to lambda closure env, then lift the IO results back to the monad transformers stack
-         >>= bindVarArgs varargs                       -- Bind the optional 'varargs' is applicable
-         >>= evalBody                                  -- Evals all expressions in the body and returns the results of the last expression
+apply (LLambdaFunc params varargs body closure) args
+  | isNothing varargs && num params /= num args = throwError $ NumArgs (num params) args
+  | num params > num args                       = throwError $ NumArgs (num params) args
+  | otherwise                                   =
+      -- Binds param names and function args to lambda closure env,
+      -- then lift the IO results back to the monad transformers stack
+      (liftIO . bindVars closure $ zip params args)
+
+      -- Bind the optional 'varargs' is applicable
+      >>= bindVarArgs varargs
+
+      -- Evals all expressions in the body and
+      -- returns the results of the last expression
+      >>= evalBody
 
   where
     num :: [a] -> Int

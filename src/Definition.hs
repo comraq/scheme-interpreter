@@ -48,14 +48,18 @@ type LIOFunction  = [LispVal] -> IOEvaled LispVal
 ------- Type Definitions -------
 
 data LispVal = LAtom          String
-             | LList          [LispVal]
-             | LDottedList    [LispVal] LispVal
              | LNumber        SchemeNumber
              | LString        String
              | LBool          Bool
              | LChar          Char
+
+             | LList          [LispVal]
+             | LDottedList    [LispVal] LispVal
              | LVector        (SVector LispVal)
+
              | LPointer       PtrVal
+             | LPort          Handle
+
              | LPrimitiveFunc LFuncName LFunction
 
              -- Constructor for user defined functions
@@ -67,7 +71,6 @@ data LispVal = LAtom          String
 
              | LIOFunc        LFuncName LIOFunction
              | LEnvFunc       LFuncName (Env -> LIOFunction)
-             | LPort          Handle
 
 data SchemeNumber = SInt      Integer
                   | SDouble   Double

@@ -48,14 +48,17 @@ primitiveFunctions =
   , ("equal?",       equal             )
 
   -- Lists/Pairs
-  , ("car",  car  )
-  , ("cdr",  cdr  )
-  , ("cons", cons )
+  , ("car",    car        )
+  , ("cdr",    cdr        )
+  , ("cons",   cons       )
+  , ("length", listLength )
 
   -- Type Testing
   , ("string?", isLString )
   , ("number?", isLNumber )
   , ("symbol?", isLAtom   )
+  , ("list?",   isLList   )
+  , ("pair?",   isPair    )
   , ("vector?", isLVector )
 
   -- Symbol Handling
@@ -65,7 +68,6 @@ primitiveFunctions =
   -- String Functions
   , ("string-length", stringLength )
   , ("string-ref",    stringRef    )
-  , ("string->list",  stringToList )
 
   -- Vector Functions,
   , ("vector",        vector       )
@@ -123,6 +125,11 @@ cons [x, LDottedList xs xlast] = return $ LDottedList (x:xs) xlast
 cons [x1, x2]                  = return $ LDottedList [x1] x2
 cons badArgList                = throwError $ NumArgs 2 badArgList
 
+listLength :: LFunction
+listLength [LList xs] = return . LNumber . SInt . toInteger $ length xs
+listLength [badArg]   = throwError $ TypeMismatch "list" badArg
+listLength args       = throwError $ NumArgs 1 args
+
 
 ------- Equality Checks -------
 
@@ -174,6 +181,22 @@ isLAtom [LAtom _] = return $ LBool True
 isLAtom [val]     = return $ LBool False
 isLAtom vals      = throwError $ NumArgs 1 vals
 
+isLList :: LFunction
+isLList [LList _] = return $ LBool True
+isLList [val]     = return $ LBool False
+isLList vals      = throwError $ NumArgs 1 vals
+
+isLDottedList :: LFunction
+isLDottedList [LDottedList _ _] = return $ LBool True
+isLDottedList [val]             = return $ LBool False
+isLDottedList vals              = throwError $ NumArgs 1 vals
+
+isPair :: LFunction
+isPair [LDottedList _ _] = return $ LBool True
+isPair [LList _]         = return $ LBool True
+isPair [val]             = return $ LBool False
+isPair vals              = throwError $ NumArgs 1 vals
+
 isLVector :: LFunction
 isLVector [LVector _] = return $ LBool True
 isLVector [val]       = return $ LBool False
@@ -204,11 +227,6 @@ stringRef [LString s, LNumber n] =
         then return . LChar $ s !! index
         else throwError $ InvalidArgs "Index is longer than string" [LString s, LNumber n]
 stringRef args = throwError $ NumArgs 2 args
-
--- TODO: Need to return mutable LPointer list
-stringToList :: LFunction
-stringToList [LString s]     = return . LList $ map LChar s
-stringToList args            = throwError $ InvalidArgs "Expected string" args
 
 
 ------- Vector Functions -------
