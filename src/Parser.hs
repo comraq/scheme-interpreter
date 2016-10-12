@@ -8,12 +8,15 @@ import Data.Ratio
 import Data.Complex
 import Numeric (readHex, readOct, readInt, readFloat, readDec)
 import Text.ParserCombinators.Parsec
+import Text.ParserCombinators.Parsec.Expr
+import Text.ParserCombinators.Parsec.Language
+import qualified Text.ParserCombinators.Parsec.Token as T
 
 import Definition
 import LispVector (vector)
 
 
-------- The Public Parsing Function -------
+------- The Exposed Parsing Function -------
 
 readOrThrow :: Parser a -> String -> Evaled a
 readOrThrow parser input = case parse parser "lisp" input of
@@ -43,9 +46,11 @@ parseExpr = parseNumber
 ------- Any Atom Parser -------
 
 parseAtom :: Parser LispVal
-parseAtom = do
-  atom <- many1 $ letter <|> digit <|> symbol
-  return . LAtom $ atom
+parseAtom = try $ do
+  atom <- identifier
+  if atom == "."
+    then pzero
+    else return $ LAtom atom
 
 
 ------- Bool Parser -------
@@ -62,10 +67,10 @@ parseBool = try $ do
 ------- Character Literal Parser -------
 
 parseChar :: Parser LispVal
-parseChar = try $ do
-  string "#\\"
-  chr <- characterName <|> character
-  return $ LChar chr
+parseChar = do
+    try $ string "#\\"
+    chr <- characterName <|> character
+    return $ LChar chr
 
   where
     delimiters :: String
@@ -180,56 +185,58 @@ parseSNumber = tryRational <|> tryComplex <|> noBase <|> try withBase
 ------- Quoted Parsers -------
 
 parseAnyQuoted :: Parser LispVal
-parseAnyQuoted = parseQuasiQuoted <|> parseQuoted
+parseAnyQuoted = parseQuasiQuoted <|> parseUnquoteSpliced <|> parseUnquoted <|> parseQuoted
 
 parseQuoted :: Parser LispVal
 parseQuoted = do
-    skipMany1 (char '\'')
-    x <- parseExpr
-    return $ LList [LAtom "quote", x]
+  lexeme $ char '\''
+  x <- parseExpr
+  return $ LList [LAtom "quote", x]
 
 parseQuasiQuoted :: Parser LispVal
-parseQuasiQuoted = between (string "`(") (char ')') quasiQuoted
-  where
-    quasiQuoted :: Parser LispVal
-    quasiQuoted = LList . (LAtom "quasiquote":)
-                  <$> ((unquoted <|> parseExpr) `sepBy` spaces1)
+parseQuasiQuoted = do
+  lexeme $ char '`'
+  expr <- parseExpr
+  return $ LList [LAtom "quasiquote", expr]
 
-    unquoted :: Parser LispVal
-    unquoted = LList . (LAtom "unquoted":) <$> do
-                  char ','
-                  unpackList <|> fmap (:[]) parseExpr
+parseUnquoted :: Parser LispVal
+parseUnquoted = do
+  lexeme $ char ','
+  expr <- parseExpr
+  return $ LList [LAtom "unquote", expr]
 
-    unpackList :: Parser [LispVal]
-    unpackList = do
-      char '@'
-      (LList vals) <- between (char '(') (char ')') parseList
-      return $ LAtom "unpack":vals
+parseUnquoteSpliced :: Parser LispVal
+parseUnquoteSpliced = do
+  try . lexeme $ string ",@"
+  expr <- parseExpr
+  return $ LList [LAtom "unquote-splicing", expr]
 
 
 ------- List Parsers -------
 
 parseAnyList :: Parser LispVal
-parseAnyList = between (char '(') (char ')') anyList
+parseAnyList = parens anyList
   where
     anyList :: Parser LispVal
     anyList = try parseDottedList <|> parseList
 
 parseList :: Parser LispVal
-parseList = LList <$> parseExpr `sepEndBy` spaces1
+parseList = LList <$> parseExpr `sepEndBy` whiteSpace
 
 parseDottedList :: Parser LispVal
 parseDottedList =
-  let head = parseExpr `endBy` spaces1
-      tail = char '.' >> spaces1 >> parseExpr
-  in  LDottedList <$> head <*> tail
+  let hd = parseExpr `endBy` whiteSpace
+      tl = dot >> parseExpr
+  in  LDottedList <$> hd <*> tl
 
 
 ------- Vector Parser -------
 
 parseVector :: Parser LispVal
-parseVector = between (string "#(") (char ')') $ do
-  vals <- parseExpr `sepEndBy` spaces1
+parseVector = do
+  lexeme $ string "#("
+  vals <- parseExpr `sepEndBy` whiteSpace
+  lexeme $ char ')'
   return . LVector $ vector vals
 
 
@@ -243,10 +250,10 @@ readBin :: String -> [(Integer, String)]
 readBin = readInt 2 (`elem` binChars) digitToInt
 
 symbolChars :: String
-symbolChars = "!$%&|*+/:<=?>@^_~-"
+symbolChars = "!$%&|*+/:<=>?@^_~-."
 
 symbol :: Parser Char
-symbol =  oneOf symbolChars
+symbol = oneOf symbolChars
 
 spaces1 :: Parser ()
 spaces1 =  skipMany1 space
@@ -256,3 +263,36 @@ notSpace = satisfy (/=' ')
 
 sepByOnce :: Parser a -> Parser sep -> Parser (a, a)
 sepByOnce p sep = (,) <$> p <* sep <*> p
+
+
+------- Language Definition -------
+
+lispDef :: LanguageDef ()
+lispDef = emptyDef {
+  T.commentStart    = "#|"
+, T.commentEnd      = "|#"
+, T.commentLine     = ";"
+, T.nestedComments  = True
+, T.identStart      = letter <|> symbol
+, T.identLetter     = letter <|> symbol <|> digit
+, T.caseSensitive   = True
+}
+
+lexer :: T.TokenParser ()
+lexer = T.makeTokenParser lispDef
+
+identifier :: Parser String
+identifier = T.identifier lexer
+
+parens :: Parser a -> Parser a
+parens = T.parens lexer
+
+whiteSpace :: Parser ()
+whiteSpace = T.whiteSpace lexer
+
+dot :: Parser String
+dot = T.dot lexer
+
+lexeme :: Parser a -> Parser a
+lexeme = T.lexeme lexer
+

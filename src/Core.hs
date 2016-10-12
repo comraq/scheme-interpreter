@@ -16,6 +16,7 @@ import Unpacker (unpackBoolCoerce)
 eval :: Env -> LispVal -> IOEvaled LispVal
 eval env expr = evalDeep env expr >>= derefPtrValSafe
 
+-- TODO: Literal lists/dotted lists/vectors should be mutable by default
 evalDeep :: Env -> LispVal -> IOEvaled LispVal
 evalDeep env (LAtom var)           = getVarDeep env var
 evalDeep _   var@(LNumber _)       = return var
@@ -26,14 +27,12 @@ evalDeep _   var@(LChar _)         = return var
 evalDeep env var@(LPointer _)      = derefPtrVal var
 
 evalDeep env val@(LList lvs)       = case lvs of
-
   -- Special Lists
   [LAtom "quote",      vs] -> return vs
-  (LAtom "quasiquote": vs) -> LList <$> sequence (evalUnquoted env vs)
+  (LAtom "quasiquote": vs) -> LList <$> sequence (evalUnquote env vs)
 
   -- Eval as a Function
   (func : args) -> callFunc env func args
-
 evalDeep _   var@(LDottedList _ _) = throwError $ BadSpecialForm "Must be a proper list" var
 evalDeep env (LVector lvs)         = LVector <$> mapM (evalDeep env) lvs
 
@@ -43,15 +42,14 @@ evalOnce :: Env -> LispVal -> IOEvaled LispVal
 evalOnce env (LAtom var)      = getVar env var
 evalOnce env var              = evalDeep env var
 
-evalUnquoted :: Env -> [LispVal] -> [IOEvaled LispVal]
-evalUnquoted env = go
+evalUnquote :: Env -> [LispVal] -> [IOEvaled LispVal]
+evalUnquote env = go
   where go :: [LispVal] -> [IOEvaled LispVal]
-        go (LList (LAtom "unquoted":vals):rest) = case vals of
-          LAtom "unpack":exprs -> map (evalDeep env) exprs ++ go rest
-          [expr]               -> evalDeep env expr : go rest
-
-        go (v:vs) = return v  : go vs
-        go []     = []
+        go (val:vals) = case val of
+          LList [LAtom "unquote", expr]          -> evalDeep env expr         : go vals
+          LList (LAtom "unquote-splicing":exprs) -> map (evalDeep env) exprs ++ go vals
+          _                                      -> return val                : go vals
+        go _      = []
 
 
 ------- Calling and Getting Scheme Functions -------

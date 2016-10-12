@@ -72,9 +72,9 @@ isBound env var = M.member var <$> readIORef env
 
 derefPtrValSafe :: LispVal -> IOEvaled LispVal
 derefPtrValSafe val@(LPointer _)    = derefPtrVal val >>= derefPtrValSafe
-derefPtrValSafe (LList vals)        = LList <$> mapM derefPtrValSafe vals
-derefPtrValSafe (LDottedList hd tl) = LDottedList <$> mapM derefPtrValSafe hd <*> derefPtrValSafe tl
-derefPtrValSafe (LVector vec)       = LVector <$> mapM derefPtrValSafe vec
+derefPtrValSafe (LList vals)        = LList       <$> mapM derefPtrValSafe vals
+derefPtrValSafe (LDottedList hd tl) = LDottedList <$> mapM derefPtrValSafe hd   <*> derefPtrValSafe tl
+derefPtrValSafe (LVector vec)       = LVector     <$> mapM derefPtrValSafe vec
 derefPtrValSafe val                 = return val
 
 derefPtrVal :: LispVal -> IOEvaled LispVal
