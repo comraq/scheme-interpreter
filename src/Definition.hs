@@ -135,9 +135,7 @@ showVal (LBool bool)            = showLBool bool
 showVal (LList contents)        = "(" ++ unwordsList contents ++ ")"
 showVal (LDottedList head tail) = "(" ++ unwordsList head ++ " . "
                                       ++ showVal tail     ++ ")"
-showVal (LVector vec)           = "#(" ++ showSVec vec ++ ")"
-  where showSVec :: SVector LispVal -> String
-        showSVec = unwordsList . elems
+showVal (LVector vec)           = "#(" ++ unwordsList (elems vec) ++ ")"
 
 showVal (LPrimitiveFunc name _)             = "<procedure:" ++ name ++ ">"
 showVal (LIOFunc name _)                    = "<procedure:" ++ name ++ ">"

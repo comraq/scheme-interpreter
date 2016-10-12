@@ -1,7 +1,7 @@
 module PrimFunction (primitiveFunctions) where
 
 import Control.Monad.Except
-import Data.Array.ST (runSTArray)
+import Data.Array.IArray ((!), bounds)
 import Data.Char (toLower)
 import Data.Foldable (foldrM)
 
@@ -51,15 +51,18 @@ primitiveFunctions =
   , ("car",    car        )
   , ("cdr",    cdr        )
   , ("cons",   cons       )
-  , ("length", listLength )
 
   -- Type Testing
-  , ("string?", isLString )
-  , ("number?", isLNumber )
-  , ("symbol?", isLAtom   )
-  , ("list?",   isLList   )
-  , ("pair?",   isPair    )
-  , ("vector?", isLVector )
+  , ("string?",    isLString   )
+  , ("number?",    isLNumber   )
+  , ("symbol?",    isLAtom     )
+  , ("boolean?",   isLBoolean  )
+  , ("char?",      isLChar     )
+  , ("port?",      isLPort     )
+  , ("pair?",      isPair      )
+  , ("vector?",    isLVector   )
+  , ("procedure?", isProcedure )
+  , ("list?",      isLList     )
 
   -- Symbol Handling
   , ("symbol->string", atomToString )
@@ -70,12 +73,8 @@ primitiveFunctions =
   , ("string-ref",    stringRef    )
 
   -- Vector Functions,
-  , ("vector",        vector       )
-  , ("make-vector",   makeVector   )
   , ("vector-length", vectorLength )
   , ("vector-ref",    vectorRef    )
-  , ("list->vector",  listToVector )
-  , ("vector->list",  listToVector )
   ]
 
 
@@ -125,14 +124,10 @@ cons [x, LDottedList xs xlast] = return $ LDottedList (x:xs) xlast
 cons [x1, x2]                  = return $ LDottedList [x1] x2
 cons badArgList                = throwError $ NumArgs 2 badArgList
 
-listLength :: LFunction
-listLength [LList xs] = return . LNumber . SInt . toInteger $ length xs
-listLength [badArg]   = throwError $ TypeMismatch "list" badArg
-listLength args       = throwError $ NumArgs 1 args
-
 
 ------- Equality Checks -------
 
+-- TODO: Currently 'equal' coerces values before checking equality
 equal :: LFunction
 equal = go
   where
@@ -143,6 +138,7 @@ equal = go
       if lastEquals
         then return . LBool $ listEqual xs ys
         else return $ LBool False
+    go [LVector xs, LVector ys] = return . LBool $ vectorEqual xs ys
 
     go [arg1, arg2] = do
       primitiveEquals <- or <$> mapM (unpackEquals arg1 arg2)
@@ -158,49 +154,80 @@ listEqual :: [LispVal] -> [LispVal] -> Bool
 listEqual xs ys
   | length xs /= length ys = False
   | otherwise              = all equalPair $ zip xs ys
-      where equalPair :: (LispVal, LispVal) -> Bool
-            equalPair (x, y) = runEvaled (const False)
-                                         unpackBoolCoerce
-                                         (equal [x, y])
 
+equalPair :: (LispVal, LispVal) -> Bool
+equalPair (x, y) = runEvaled (const False) unpackBoolCoerce (equal [x, y])
+
+vectorEqual :: SVector LispVal -> SVector LispVal -> Bool
+vectorEqual xs ys =
+  let (_, xHigh) = bounds xs
+      (_, yHigh) = bounds ys
+      allEqual i = (i == xHigh) ||
+                     (equalPair (xs ! i, ys ! i) && allEqual (i + 1))
+
+  in  xHigh == yHigh && allEqual 0
 
 ------- Type Testing -------
 
 isLString :: LFunction
 isLString [LString _] = return $ LBool True
-isLString [val]       = return $ LBool False
+isLString [_]         = return $ LBool False
 isLString vals        = throwError $ NumArgs 1 vals
 
 isLNumber :: LFunction
 isLNumber [LNumber _] = return $ LBool True
-isLNumber [val]       = return $ LBool False
+isLNumber [_]         = return $ LBool False
 isLNumber vals        = throwError $ NumArgs 1 vals
+
+isLBoolean :: LFunction
+isLBoolean [LBool _] = return $ LBool True
+isLBoolean [_]       = return $ LBool False
+isLBoolean vals      = throwError $ NumArgs 1 vals
+
+isLChar :: LFunction
+isLChar [LChar _] = return $ LBool True
+isLChar [_]       = return $ LBool False
+isLChar vals      = throwError $ NumArgs 1 vals
+
+isLPort :: LFunction
+isLPort [LPort _] = return $ LBool True
+isLPort [_]       = return $ LBool False
+isLPort vals      = throwError $ NumArgs 1 vals
 
 isLAtom :: LFunction
 isLAtom [LAtom _] = return $ LBool True
-isLAtom [val]     = return $ LBool False
+isLAtom [_]       = return $ LBool False
 isLAtom vals      = throwError $ NumArgs 1 vals
 
 isLList :: LFunction
 isLList [LList _] = return $ LBool True
-isLList [val]     = return $ LBool False
+isLList [_]       = return $ LBool False
 isLList vals      = throwError $ NumArgs 1 vals
 
 isLDottedList :: LFunction
 isLDottedList [LDottedList _ _] = return $ LBool True
-isLDottedList [val]             = return $ LBool False
+isLDottedList [_]               = return $ LBool False
 isLDottedList vals              = throwError $ NumArgs 1 vals
 
 isPair :: LFunction
 isPair [LDottedList _ _] = return $ LBool True
 isPair [LList _]         = return $ LBool True
-isPair [val]             = return $ LBool False
+isPair [_]               = return $ LBool False
 isPair vals              = throwError $ NumArgs 1 vals
 
 isLVector :: LFunction
 isLVector [LVector _] = return $ LBool True
-isLVector [val]       = return $ LBool False
+isLVector [_]         = return $ LBool False
 isLVector vals        = throwError $ NumArgs 1 vals
+
+isProcedure :: LFunction
+isProcedure [LPrimitiveFunc _ _] = return $ LBool True
+isProcedure [LIOFunc        _ _] = return $ LBool True
+isProcedure [LEnvFunc       _ _] = return $ LBool True
+isProcedure [LLambdaFunc    {} ] = return $ LBool True
+isProcedure [_]                  = return $ LBool False
+isProcedure vals                 = throwError $ NumArgs 1 vals
+
 
 
 ------- Symbol Handling -------
@@ -231,17 +258,6 @@ stringRef args = throwError $ NumArgs 2 args
 
 ------- Vector Functions -------
 
-vector :: LFunction
-vector args = return . LVector $ runSTArray (V.vector args)
-
-makeVector :: LFunction
-makeVector [LNumber n] =
-  return . LVector $ runSTArray (V.makeVector (fromIntegral n) $ LBool False)
-makeVector [LNumber n, val] =
-  return . LVector $ runSTArray (V.makeVector (fromIntegral n) val)
-makeVector args =
-  throwError $ InvalidArgs "Expected vector length and optional fill value" args
-
 vectorLength :: LFunction
 vectorLength [LVector v] = return . LNumber . SInt . toInteger $ V.vectorLength v
 vectorLength args        = throwError $ NumArgs 1 args
@@ -249,14 +265,6 @@ vectorLength args        = throwError $ NumArgs 1 args
 vectorRef :: LFunction
 vectorRef [LVector v, LNumber n] = return . V.vectorRef v $ fromIntegral n
 vectorRef args                   = throwError $ NumArgs 2 args
-
-vectorToList :: LFunction
-vectorToList [LVector v] = return . LList $ V.vectorToList v
-vectorToList args        = throwError $ NumArgs 1 args
-
-listToVector :: LFunction
-listToVector [LList vals] = vector vals
-listToVector args         = throwError $ NumArgs 1 args
 
 
 ------- Utility Functions -------

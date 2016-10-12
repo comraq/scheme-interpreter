@@ -8,32 +8,28 @@ module LispVector
   , vectorFill
   ) where
 
-import Control.Monad.ST
-import Data.Array
-import Data.Array.MArray
-import Data.Array.ST
+import Data.Array.IO
+import Data.Array.IArray
 
 import Definition
 
 
-type MutSVector s = STArray s Int
-
 -- size must be >= 0
-makeVector :: Int -> a -> ST s (MutSVector s a)
+makeVector :: Int -> a -> SVector a
 makeVector size val =
-  let bounds = getLVecBounds size
-  in  newArray bounds val
+  let (low, high) = getLVecBounds size
+  in  array (low, high) $ zip [low..high] (repeat val)
 
-vector :: [a] -> ST s (MutSVector s a)
+vector :: [a] -> SVector a
 vector vals =
   let bounds = getLVecBounds $ length vals
-  in  newListArray bounds vals
+  in  listArray bounds vals
 
 getLVecBounds :: Int -> (Int, Int)
 getLVecBounds size = (0, size - 1)
 
-vectorSet :: Int -> a -> MutSVector s a -> ST s (MutSVector s a)
-vectorSet i val vec = writeArray vec i val >> return vec
+vectorSet :: Int -> a -> SVector a -> SVector a
+vectorSet i val vec = vec // [(i, val)]
 
 vectorLength :: SVector a -> Int
 vectorLength = (+1) . snd . bounds
@@ -44,5 +40,5 @@ vectorRef = (!)
 vectorToList :: SVector a -> [a]
 vectorToList = elems
 
-vectorFill :: a -> MutSVector s a -> ST s (MutSVector s a)
-vectorFill val = mapArray (const val)
+vectorFill :: b -> SVector a -> SVector b
+vectorFill val = amap (const val)

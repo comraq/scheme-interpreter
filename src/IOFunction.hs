@@ -4,6 +4,7 @@ import Control.Monad.Except
 import System.IO
 
 import Definition
+import qualified LispVector as V
 import Parser
 import Variable
 
@@ -32,6 +33,12 @@ ioFunctions =
   , ("string-append"    , stringAppend       )
   , ("list->string"     , listToString       )
   , ("string->list"     , stringToList       )
+
+  -- Vector Functions,
+  , ("vector",        vector       )
+  , ("make-vector",   makeVector   )
+  , ("list->vector",  listToVector )
+  , ("vector->list",  vectorToList )
   ]
 
 makePort :: IOMode -> LIOFunction
@@ -96,3 +103,25 @@ listToString args         = throwError $ InvalidArgs "Expected a char list" args
 stringToList :: LIOFunction
 stringToList [LString s] = liftIO . toPtrVal . LList $ map LChar s
 stringToList args        = throwError $ InvalidArgs "Expected string" args
+
+
+------- Vector Functions -------
+
+vector :: LIOFunction
+vector args = liftIO . toPtrVal . LVector $ V.vector args
+
+makeVector :: LIOFunction
+makeVector [LNumber n] =
+  liftIO . toPtrVal . LVector $ V.makeVector (fromIntegral n) (LBool False)
+makeVector [LNumber n, val] =
+  liftIO . toPtrVal . LVector $ V.makeVector (fromIntegral n) val
+makeVector args =
+  throwError $ InvalidArgs "Expected vector length and optional fill value" args
+
+vectorToList :: LIOFunction
+vectorToList [LVector v] = liftIO . toPtrVal . LList $ V.vectorToList v
+vectorToList args        = throwError $ NumArgs 1 args
+
+listToVector :: LIOFunction
+listToVector [LList vals] = vector vals
+listToVector args         = throwError $ NumArgs 1 args

@@ -2,7 +2,6 @@ module Parser (readExpr, readExprList) where
 
 import Control.Monad (void)
 import Control.Monad.Except
-import Data.Array.ST
 import Data.Char (digitToInt)
 import Data.Maybe (maybeToList)
 import Data.Ratio
@@ -231,7 +230,7 @@ parseDottedList =
 parseVector :: Parser LispVal
 parseVector = between (string "#(") (char ')') $ do
   vals <- parseExpr `sepEndBy` spaces1
-  return $ LVector (runSTArray $ vector vals)
+  return . LVector $ vector vals
 
 
 ------- Helper Parsers -------

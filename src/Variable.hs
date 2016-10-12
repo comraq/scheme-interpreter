@@ -7,7 +7,6 @@ module Variable
   , runIOEvaledSafe
   , emptyEnv
   , liftEvaled
-  , trapError
   , runEvaled
   , bindingNotFound
 
@@ -18,7 +17,8 @@ module Variable
   , defineVar
   , bindVars
 
-  , readPtrVal
+  , derefPtrValSafe
+  , derefPtrVal
   , modifyPtrVal
   , toPtrVal
 
@@ -54,14 +54,32 @@ runIOEvaled errHandler sucHandler = fmap (either errHandler sucHandler)
 
 runIOEvaledSafe :: IOEvaled String -> IO String
 runIOEvaledSafe = runIOEvaled undefined id . trapError
+  where
+    trapError :: IOEvaled String -> IOEvaled String
+    trapError action = catchError action showLispErrorSafe
+
+    showLispErrorSafe :: LispError -> IOEvaled String
+    showLispErrorSafe (NumArgs str vals)       = show . NumArgs str <$> traverse derefPtrValSafe vals
+    showLispErrorSafe (TypeMismatch str val)   = show . TypeMismatch str <$> derefPtrValSafe val
+    showLispErrorSafe (BadSpecialForm str val) = show . BadSpecialForm str <$> derefPtrValSafe val
+    showLispErrorSafe (ImmutableArg str val)   = show . ImmutableArg str <$> derefPtrValSafe val
+    showLispErrorSafe (InvalidArgs str vals)   = show . InvalidArgs str <$> traverse derefPtrValSafe vals
+    showLispErrorSafe e                        = return $ show e
 
 -- Check if a variable has a binding in the environment
 isBound :: Env -> VarName -> IO Bool
 isBound env var = M.member var <$> readIORef env
 
-readPtrVal :: LispVal -> IOEvaled LispVal
-readPtrVal (LPointer ptrVal) = liftIO $ readIORef ptrVal
-readPtrVal val               = throwError $ ImmutableArg "Not pointer value" val
+derefPtrValSafe :: LispVal -> IOEvaled LispVal
+derefPtrValSafe val@(LPointer _)    = derefPtrVal val >>= derefPtrValSafe
+derefPtrValSafe (LList vals)        = LList <$> mapM derefPtrValSafe vals
+derefPtrValSafe (LDottedList hd tl) = LDottedList <$> mapM derefPtrValSafe hd <*> derefPtrValSafe tl
+derefPtrValSafe (LVector vec)       = LVector <$> mapM derefPtrValSafe vec
+derefPtrValSafe val                 = return val
+
+derefPtrVal :: LispVal -> IOEvaled LispVal
+derefPtrVal (LPointer ptrVal) = liftIO $ readIORef ptrVal
+derefPtrVal val               = throwError $ ImmutableArg "Not pointer value" val
 
 {-
  - Gets the variable from the environment
@@ -126,9 +144,6 @@ bindVars env bindings = modifyIORef env extendEnv >> return env
 
 toPtrVal :: LispVal -> IO LispVal
 toPtrVal = fmap LPointer . newIORef
-
-trapError :: MonadError LispError m => m String -> m String
-trapError action = catchError action $ return . show
 
 
 ------- Utility Functions to work with Map with LispErrors -------
