@@ -1,6 +1,5 @@
 module Parser (readExpr, readExprList) where
 
-import Control.Monad (void)
 import Control.Monad.Except
 import Data.Char (digitToInt)
 import Data.Maybe (maybeToList)
@@ -61,29 +60,35 @@ parseBool = try $ do
   boolChar <- oneOf "tf"
   return . LBool $ case boolChar of
     't' -> True
-    'f' -> False
+    _   -> False
 
 
 ------- Character Literal Parser -------
 
 parseChar :: Parser LispVal
-parseChar = do
-    try $ string "#\\"
-    chr <- characterName <|> character
-    return $ LChar chr
-
+parseChar = try (string "#\\") >> fmap LChar character
   where
-    delimiters :: String
-    delimiters = " ()"
-
     character :: Parser Char
-    character = anyChar <* lookAhead (void (oneOf delimiters) <|> eof)
-
-    characterName :: Parser Char
-    characterName = (string "space" <|> string "newline") >>= \chrName ->
-      return $ case chrName of
-        "space"   -> ' '
-        "newline" -> '\n'
+    character = do
+      ch   <- anyChar
+      rest <- many letter
+      case ch:rest of
+        "altmode"   -> return '\ESC'
+        "backnext"  -> return '\US'
+        "backspace" -> return '\BS'
+        "call"      -> return '\SUB'
+        "delete"    -> return '\DEL'
+        "escape"    -> return '\ESC'
+        "linefeed"  -> return '\LF'
+        "newline"   -> return '\n'
+        "null"      -> return '\NUL'
+        "page"      -> return '\FF'
+        "return"    -> return '\CR'
+        "rubout"    -> return '\DEL'
+        "space"     -> return ' '
+        "tab"       -> return '\t'
+        [c]         -> return c
+        _           -> pzero
 
 
 ------- String Parser -------
@@ -91,21 +96,21 @@ parseChar = do
 parseString :: Parser LispVal
 parseString = do
   char '"'
-  strings <- many validString
+  chars <- many $ validStringChar <|> noneOf "\""
   char '"'
-  return . LString . concat $ strings
+  return $ LString chars
 
-validString :: Parser String
-validString = many1 (noneOf "\\\"") <|> escaped
-  where
-    escaped :: Parser String
-    escaped =  char '\\' >>
-      oneOf "\\\"ntr" >>=
-        \x -> return $ case x of
-          'n' -> "\n"
-          't' -> "\t"
-          'r' -> "\r"
-          _   -> [x]
+validStringChar :: Parser Char
+validStringChar = do
+  char '\\'
+  c <- oneOf "\\\"abnrt"
+  return $ case c of
+    'a' -> '\a'
+    'b' -> '\b'
+    'n' -> '\n'
+    'r' -> '\r'
+    't' -> '\t'
+    _   -> c
 
 
 ------- Number Parsers -------
@@ -147,10 +152,10 @@ parseSNumber = tryRational <|> tryComplex <|> noBase <|> try withBase
     baseChars = "bodx"
 
     getNumFromBaseChar :: Char -> Parser SchemeNumber
-    getNumFromBaseChar 'b' = SInt . fst . head . readBin   <$> many1 (oneOf binChars)
-    getNumFromBaseChar 'o' = SInt . fst . head . readOct   <$> many1 octDigit
+    getNumFromBaseChar 'b' = SInt . fst . head . readBin <$> many1 (oneOf binChars)
+    getNumFromBaseChar 'o' = SInt . fst . head . readOct <$> many1 octDigit
     getNumFromBaseChar 'd' = noBase
-    getNumFromBaseChar 'x' = SInt . fst . head . readHex   <$> many1 hexDigit
+    getNumFromBaseChar 'x' = SInt . fst . head . readHex <$> many1 hexDigit
 
     tryRational :: Parser SchemeNumber
     tryRational = try $ do
@@ -185,7 +190,10 @@ parseSNumber = tryRational <|> tryComplex <|> noBase <|> try withBase
 ------- Quoted Parsers -------
 
 parseAnyQuoted :: Parser LispVal
-parseAnyQuoted = parseQuasiQuoted <|> parseUnquoteSpliced <|> parseUnquoted <|> parseQuoted
+parseAnyQuoted =   parseQuasiQuoted
+               <|> parseUnquoteSpliced
+               <|> parseUnquoted
+               <|> parseQuoted
 
 parseQuoted :: Parser LispVal
 parseQuoted = do
@@ -295,4 +303,3 @@ dot = T.dot lexer
 
 lexeme :: Parser a -> Parser a
 lexeme = T.lexeme lexer
-
