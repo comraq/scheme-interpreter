@@ -16,31 +16,30 @@ import Unpacker (unpackBoolCoerce)
 eval :: Env -> LispVal -> IOEvaled LispVal
 eval env expr = evalDeep env expr >>= derefPtrValSafe
 
--- TODO: Literal lists/dotted lists/vectors should be mutable by default
 evalDeep :: Env -> LispVal -> IOEvaled LispVal
 evalDeep env (LAtom var)           = getVarDeep env var
-evalDeep _   var@(LNumber _)       = return var
-evalDeep _   var@(LString _)       = return var
-evalDeep _   var@(LBool _)         = return var
-evalDeep _   var@(LChar _)         = return var
+evalDeep _   var@(LNumber _)       = wrapIfMutable var
+evalDeep _   var@(LString _)       = wrapIfMutable var
+evalDeep _   var@(LBool _)         = wrapIfMutable var
+evalDeep _   var@(LChar _)         = wrapIfMutable var
+evalDeep _   var@(LVector _)       = wrapIfMutable var
 
 evalDeep env var@(LPointer _)      = derefPtrVal var
 
 evalDeep env val@(LList lvs)       = case lvs of
   -- Special Lists
-  [LAtom "quote",      vs] -> return vs
+  [LAtom "quote",      vs] -> wrapIfMutable vs
   (LAtom "quasiquote": vs) -> LList <$> sequence (evalUnquote env vs)
 
   -- Eval as a Function
   (func : args) -> callFunc env func args
-evalDeep _   var@(LDottedList _ _) = throwError $ BadSpecialForm "Must be a proper list" var
-evalDeep env (LVector lvs)         = LVector <$> mapM (evalDeep env) lvs
 
+evalDeep _   var@(LDottedList _ _) = throwError $ BadSpecialForm "Must be a proper list" var
 evalDeep _   badForm               = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 evalOnce :: Env -> LispVal -> IOEvaled LispVal
-evalOnce env (LAtom var)      = getVar env var
-evalOnce env var              = evalDeep env var
+evalOnce env (LAtom var) = getVar env var
+evalOnce env var         = evalDeep env var
 
 evalUnquote :: Env -> [LispVal] -> [IOEvaled LispVal]
 evalUnquote env = go
@@ -48,8 +47,15 @@ evalUnquote env = go
         go (val:vals) = case val of
           LList [LAtom "unquote", expr]          -> evalDeep env expr         : go vals
           LList (LAtom "unquote-splicing":exprs) -> map (evalDeep env) exprs ++ go vals
-          _                                      -> return val                : go vals
+          _                                      -> wrapIfMutable val         : go vals
         go _      = []
+
+wrapIfMutable :: LispVal -> IOEvaled LispVal
+wrapIfMutable lispVal = case lispVal of
+  LList       vs     -> mapM wrapIfMutable vs  >>= liftIO . toPtrVal . LList
+  LVector     vec    -> mapM wrapIfMutable vec >>= liftIO . toPtrVal . LVector
+  LDottedList hd  tl -> LDottedList <$> mapM wrapIfMutable hd <*> wrapIfMutable tl >>= liftIO . toPtrVal
+  _                  -> return lispVal
 
 
 ------- Calling and Getting Scheme Functions -------
@@ -60,10 +66,12 @@ callFunc env func args = evalDeep env func >>= funcApply
     funcApply :: LispVal -> IOEvaled LispVal
     funcApply (LEnvFunc _ f)   = f env args
     funcApply f@LLambdaFunc {} = mapM (evalOnce env) args >>= apply f
-    funcApply f                = mapM (eval env) args >>= apply f
+    -- funcApply f                = mapM (eval env) args >>= apply f
+    funcApply f                = mapM (evalDeep env) args >>= apply f
 
 apply :: LispVal -> LIOFunction
 apply (LPrimitiveFunc _ f)                      args = liftEvaled $ f args
+-- apply (LPrimitiveFunc _ f)                      args = liftEvaled (f args) >>= wrapIfMutable
 apply (LIOFunc _ f)                             args = f args
 apply (LLambdaFunc params varargs body closure) args
   | isNothing varargs && num params /= num args = throwError $ NumArgs (num params) args
