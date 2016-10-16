@@ -1,6 +1,8 @@
+{-# LANGUAGE TupleSections #-}
+
 module Core (eval, primitiveEnv) where
 
-import Control.Arrow ((&&&))
+import Control.Arrow ((&&&), first)
 import Control.Monad.Except
 import Data.Maybe (fromMaybe, isNothing)
 
@@ -16,7 +18,6 @@ import Unpacker (unpackBoolCoerce)
 eval :: Env -> LispVal -> IOEvaled LispVal
 eval env expr = evalDeep env expr >>= derefPtrValSafe
 
--- TODO: Literal lists/dotted lists/vectors should be mutable by default
 evalDeep :: Env -> LispVal -> IOEvaled LispVal
 evalDeep env (LAtom var)           = getVarDeep env var
 evalDeep _   var@(LNumber _)       = return var
@@ -29,27 +30,59 @@ evalDeep env var@(LPointer _)      = derefPtrVal var
 evalDeep env val@(LList lvs)       = case lvs of
   -- Special Lists
   [LAtom "quote",      vs] -> return vs
-  (LAtom "quasiquote": vs) -> LList <$> sequence (evalUnquote env vs)
+  [LAtom "quasiquote", vs] -> evalQuasiquote env vs
 
   -- Eval as a Function
   (func : args) -> callFunc env func args
-evalDeep _   var@(LDottedList _ _) = throwError $ BadSpecialForm "Must be a proper list" var
-evalDeep env (LVector lvs)         = LVector <$> mapM (evalDeep env) lvs
 
+evalDeep _   var@(LDottedList _ _) = throwError $ BadSpecialForm "Literal dotted lists must be quoted!" var
+evalDeep _   var@(LVector _)       = throwError $ BadSpecialForm "Literal vectors must be quoted!" var
 evalDeep _   badForm               = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 evalOnce :: Env -> LispVal -> IOEvaled LispVal
-evalOnce env (LAtom var)      = getVar env var
-evalOnce env var              = evalDeep env var
+evalOnce env (LAtom var) = getVar env var
+evalOnce env var         = evalDeep env var
 
-evalUnquote :: Env -> [LispVal] -> [IOEvaled LispVal]
-evalUnquote env = go
-  where go :: [LispVal] -> [IOEvaled LispVal]
-        go (val:vals) = case val of
-          LList [LAtom "unquote", expr]          -> evalDeep env expr         : go vals
-          LList (LAtom "unquote-splicing":exprs) -> map (evalDeep env) exprs ++ go vals
-          _                                      -> return val                : go vals
-        go _      = []
+evalQuasiquote :: Env -> LispVal -> IOEvaled LispVal
+evalQuasiquote env lispVal = case lispVal of
+    LList [LAtom "unquote", expr]       -> evalDeep env expr
+    LList [LAtom "unquote-splicing", _] ->
+      throwError $ BadSpecialForm "unquote-splicing found outside of list" lispVal
+    LList exprs                         -> makeLispVal <$> evalUnquotedList exprs
+    _                                   -> evalUnquoted lispVal
+
+  where
+    makeLispVal :: ([LispVal], Maybe LispVal) -> LispVal
+    makeLispVal (vals, Just val) = LDottedList vals val
+    makeLispVal (vals, _       ) = LList vals
+
+    evalUnquotedList :: [LispVal] -> IOEvaled ([LispVal], Maybe LispVal)
+    evalUnquotedList [ LList [LAtom "unquote-splicing", expr] ] = do
+      evaled <- evalDeep env expr
+      case evaled of
+        LList vs         -> return (vs, Nothing    )
+        LDottedList vs v -> return (vs, Just v     )
+        _                -> return ([], Just evaled)
+
+    evalUnquotedList (LList [LAtom "unquote-splicing", expr]:vals) =
+      (\vs -> first (vs ++)) <$> (evalDeep env expr >>= unpackSpliced) <*> evalUnquotedList vals
+    evalUnquotedList (val:vals) = (\v -> first (v:)) <$> evalUnquoted val <*> evalUnquotedList vals
+    evalUnquotedList _          = return ([], Nothing)
+
+    unpackSpliced :: LispVal -> IOEvaled [LispVal]
+    unpackSpliced (LList vs) = return vs
+    unpackSpliced v          =
+      throwError $ TypeMismatch "unquote-splicing evaluated to non-list" v
+
+    evalUnquoted :: LispVal -> IOEvaled LispVal
+    evalUnquoted (LList [LAtom "unquote", expr]) = evalDeep env expr
+    evalUnquoted (LList exprs)                   = makeLispVal <$> evalUnquotedList exprs
+    evalUnquoted (LDottedList hd tl)             = do
+      evaledHead <- evalUnquotedList hd
+      case evaledHead of
+        (vs, Nothing) -> LDottedList vs <$> evalUnquoted tl
+        (_,  Just v ) -> throwError $ TypeMismatch "unquote-splicing evaluated to non-list" v
+    evalUnquoted val                             = return val
 
 
 ------- Calling and Getting Scheme Functions -------
