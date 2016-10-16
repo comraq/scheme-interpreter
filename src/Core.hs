@@ -15,6 +15,10 @@ import Variable
 import Unpacker (unpackBoolCoerce)
 
 
+-- Pseudo Continuation/Callback for evaluating quasiquoted expressions
+type QuasiquoteCont = LispVal -> IOEvaled LispVal
+
+
 eval :: Env -> LispVal -> IOEvaled LispVal
 eval env expr = evalDeep env expr >>= derefPtrValSafe
 
@@ -44,45 +48,54 @@ evalOnce env (LAtom var) = getVar env var
 evalOnce env var         = evalDeep env var
 
 evalQuasiquote :: Env -> LispVal -> IOEvaled LispVal
-evalQuasiquote env lispVal = case lispVal of
-    LList [LAtom "unquote", expr]       -> evalDeep env expr
+evalQuasiquote env lispval = case lispval of
     LList [LAtom "unquote-splicing", _] ->
-      throwError $ BadSpecialForm "unquote-splicing found outside of list" lispVal
-    LList exprs                         -> makeLispVal <$> evalUnquotedList exprs
-    _                                   -> evalUnquoted lispVal
+      throwError $ BadSpecialForm "unquote-splicing found outside of list" lispval
 
+    _ -> evalUnquotedCont (evalDeep env) lispval
+
+evalUnquotedListCont :: QuasiquoteCont -> [LispVal] -> IOEvaled ([LispVal], Maybe LispVal)
+evalUnquotedListCont cont [ LList [LAtom "unquote-splicing", expr] ] = do
+  evaled <- cont expr
+  case evaled of
+    LList vs         -> return (vs, Nothing    )
+    LDottedList vs v -> return (vs, Just v     )
+    _                -> return ([], Just evaled)
+evalUnquotedListCont cont (LList [LAtom "unquote-splicing", expr]:vals) =
+        first . (++)
+    <$> (cont expr >>= unpackSpliced)
+    <*> evalUnquotedListCont cont vals
+  where unpackSpliced :: LispVal -> IOEvaled [LispVal]
+        unpackSpliced (LList vs) = return vs
+        unpackSpliced v          =
+          throwError $ TypeMismatch "unquote-splicing evaluated to non-list" v
+evalUnquotedListCont cont (val:vals) =
+      first . (:)
+  <$> evalUnquotedCont cont val
+  <*> evalUnquotedListCont cont vals
+evalUnquotedListCont _     _          = return ([], Nothing)
+
+evalUnquotedCont :: QuasiquoteCont -> LispVal -> IOEvaled LispVal
+evalUnquotedCont cont (LDottedList hd tl) = do
+  evaledHead <- evalUnquotedListCont cont hd
+  case evaledHead of
+    (vs, Nothing) -> LDottedList vs <$> evalUnquotedCont cont tl
+    (_,  Just v ) -> throwError $ TypeMismatch "unquote-splicing evaluated to non-list" v
+evalUnquotedCont cont (LList vs) = case vs of
+    [LAtom "unquote", expr]    ->  cont expr
+    [LAtom "quasiquote", expr] ->  (\v -> LList [LAtom "quasiquote", v])
+                               <$> evalUnquotedCont (fmap wrapInUnquote . evalUnquotedCont cont) expr
+
+    _                          ->  makeLispVal <$> evalUnquotedListCont cont vs
   where
     makeLispVal :: ([LispVal], Maybe LispVal) -> LispVal
     makeLispVal (vals, Just val) = LDottedList vals val
     makeLispVal (vals, _       ) = LList vals
 
-    evalUnquotedList :: [LispVal] -> IOEvaled ([LispVal], Maybe LispVal)
-    evalUnquotedList [ LList [LAtom "unquote-splicing", expr] ] = do
-      evaled <- evalDeep env expr
-      case evaled of
-        LList vs         -> return (vs, Nothing    )
-        LDottedList vs v -> return (vs, Just v     )
-        _                -> return ([], Just evaled)
+    wrapInUnquote :: LispVal -> LispVal
+    wrapInUnquote v = LList [LAtom "unquote", v]
 
-    evalUnquotedList (LList [LAtom "unquote-splicing", expr]:vals) =
-      (\vs -> first (vs ++)) <$> (evalDeep env expr >>= unpackSpliced) <*> evalUnquotedList vals
-    evalUnquotedList (val:vals) = (\v -> first (v:)) <$> evalUnquoted val <*> evalUnquotedList vals
-    evalUnquotedList _          = return ([], Nothing)
-
-    unpackSpliced :: LispVal -> IOEvaled [LispVal]
-    unpackSpliced (LList vs) = return vs
-    unpackSpliced v          =
-      throwError $ TypeMismatch "unquote-splicing evaluated to non-list" v
-
-    evalUnquoted :: LispVal -> IOEvaled LispVal
-    evalUnquoted (LList [LAtom "unquote", expr]) = evalDeep env expr
-    evalUnquoted (LList exprs)                   = makeLispVal <$> evalUnquotedList exprs
-    evalUnquoted (LDottedList hd tl)             = do
-      evaledHead <- evalUnquotedList hd
-      case evaledHead of
-        (vs, Nothing) -> LDottedList vs <$> evalUnquoted tl
-        (_,  Just v ) -> throwError $ TypeMismatch "unquote-splicing evaluated to non-list" v
-    evalUnquoted val                             = return val
+evalUnquotedCont _    lispval = return lispval
 
 
 ------- Calling and Getting Scheme Functions -------
@@ -93,7 +106,7 @@ callFunc env func args = evalDeep env func >>= funcApply
     funcApply :: LispVal -> IOEvaled LispVal
     funcApply (LEnvFunc _ f)   = f env args
     funcApply f@LLambdaFunc {} = mapM (evalOnce env) args >>= apply f
-    funcApply f                = mapM (eval env) args >>= apply f
+    funcApply f                = mapM (evalDeep env) args >>= apply f
 
 apply :: LispVal -> LIOFunction
 apply (LPrimitiveFunc _ f)                      args = liftEvaled $ f args
