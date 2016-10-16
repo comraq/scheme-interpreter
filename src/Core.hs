@@ -123,7 +123,7 @@ apply (LLambdaFunc params varargs body closure) args
     bindVarArgs :: Maybe String -> Env -> IOEvaled Env
     bindVarArgs Nothing        env = return env
     bindVarArgs (Just argName) env =
-      liftIO $ bindVars env [(argName, LList remainingArgs)]
+      liftIO $ mBindVars env [(argName, LList remainingArgs)]
 
     remainingArgs :: [LispVal]
     remainingArgs = drop (length params) args
@@ -134,7 +134,7 @@ apply expr _ = throwError . NotFunction "Trying to call non-function" $ show exp
 ------- Environment with all Function Preset Bindings -------
 
 primitiveEnv :: IO Env
-primitiveEnv = emptyEnv >>= (`bindVars` (primFuncs ++ envFuncs ++ ioFuncs))
+primitiveEnv = emptyEnv >>= (`mBindVars` (primFuncs ++ envFuncs ++ ioFuncs))
   where
     makeFunc :: (LFuncName -> func -> LispVal)
              -> (LFuncName, func)
@@ -179,12 +179,12 @@ define :: Env -> LIOFunction
 
 -- 'define' a function binding
 define env (LList (LAtom func:params):body) =
-  makeNormalFunc env params body >>= defineVar env func
+  makeNormalFunc env params body >>= liftIO . defineVar env func
 define env (LDottedList (LAtom func:params) varargs:body) =
-  makeVarargs varargs env params body >>= defineVar env func
+  makeVarargs varargs env params body >>= liftIO . defineVar env func
 
 -- 'define' a variable binding
-define env [LAtom var, form] = evalOnce env form >>= defineVar env var
+define env [LAtom var, form] = evalOnce env form >>= liftIO . defineVar env var
 define _   args              = throwError $ NumArgs 2 args
 
 lambda :: Env -> LIOFunction

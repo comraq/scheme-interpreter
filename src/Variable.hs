@@ -16,6 +16,7 @@ module Variable
   , setVar
   , defineVar
   , bindVars
+  , mBindVars
 
   , derefPtrValSafe
   , derefPtrVal
@@ -129,18 +130,21 @@ modifyPtrVal f (LPointer ptr) = do
   return newVal
 modifyPtrVal _ val = throwError $ ImmutableArg "Modifying non-mutable value" val
 
-defineVar :: Env -> VarName -> LispVal -> IOEvaled LispVal
-defineVar env var value =
-  liftIO $ env `modifyIORef` M.insert var value >> return value
+defineVar :: Env -> VarName -> LispVal -> IO LispVal
+defineVar env var value = env `modifyIORef` M.insert var value >> return value
 
+-- Updates/Mutates current environment with all of the new bindings
+mBindVars :: Env -> [(VarName, LispVal)] -> IO Env
+mBindVars env bindings = modifyIORef env (extendEnv bindings) >> return env
+
+extendEnv :: [(VarName, LispVal)] -> M.Map VarName LispVal -> M.Map VarName LispVal
+extendEnv bindings envMap = foldr addToMap envMap bindings
+  where addToMap :: Ord k => (k, v) -> M.Map k v -> M.Map k v
+        addToMap = uncurry M.insert
+
+-- Creates a new environment with old and all of the new bindings
 bindVars :: Env -> [(VarName, LispVal)] -> IO Env
-bindVars env bindings = modifyIORef env extendEnv >> return env
-  where
-    extendEnv :: M.Map VarName LispVal -> M.Map VarName LispVal
-    extendEnv envMap = foldr addToMap envMap bindings
-
-    addToMap :: Ord k => (k, v) -> M.Map k v -> M.Map k v
-    addToMap = uncurry M.insert
+bindVars env bindings = extendEnv bindings <$> readIORef env >>= newIORef
 
 toPtrVal :: LispVal -> IO LispVal
 toPtrVal = fmap LPointer . newIORef
