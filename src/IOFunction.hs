@@ -27,6 +27,9 @@ ioFunctions =
   , ("read-contents"    , readContents       )
   , ("read-all"         , readAll            )
 
+  -- List Functions
+  , ("list"             , list               )
+
   -- String Functions
   , ("make-string"      , makeString         )
   , ("substring"        , substring          )
@@ -68,6 +71,15 @@ readContents args               = throwError $ NumArgs 1 args
 readAll :: LIOFunction
 readAll [LString filename] = LList <$> load filename
 readAll args               = throwError $ NumArgs 1 args
+
+
+------- List Functions -------
+
+list :: LIOFunction
+list = liftIO . toPtrVal . LList
+
+
+------- String Functions -------
 
 makeString :: LIOFunction
 makeString args = case args of

@@ -136,7 +136,7 @@ apply (LLambdaFunc params varargs body closure) args
     bindVarArgs :: Maybe String -> Env -> IOEvaled Env
     bindVarArgs Nothing        env = return env
     bindVarArgs (Just argName) env =
-      liftIO $ mBindVars env [(argName, LList remainingArgs)]
+      liftIO $ bindVars env [(argName, LList remainingArgs)]
 
     remainingArgs :: [LispVal]
     remainingArgs = drop (length params) args
@@ -168,25 +168,24 @@ primitiveEnv = emptyEnv >>= (`mBindVars` (primFuncs ++ envFuncs ++ ioFuncs))
 
 envFunctions :: [(LFuncName, Env -> LIOFunction)]
 envFunctions =
-  [ ("set!"        , setBang        )
-  , ("define"      , define         )
+  [ ("define"      , define         )
   , ("lambda"      , lambda         )
-  , ("string-set!" , stringSetBang  )
-  , ("vector-set!" , vectorSetBang  )
-  , ("vector-fill!", vectorFillBang )
   , ("load"        , loadProc       )
   , ("if"          , evalIf         )
   , ("cond"        , evalCond       )
   , ("case"        , evalCase       )
 
+  , ("set!"        , setBang        )
+  , ("string-set!" , stringSetBang  )
+  , ("set-car!"    , setCarBang     )
+  , ("set-cdr!"    , setCdrBang     )
+  , ("vector-set!" , vectorSetBang  )
+  , ("vector-fill!", vectorFillBang )
+
   , ("eq?"         , eqv            )
   , ("eqv?"        , eqv            )
   , ("apply"       , applyProc      )
   ]
-
-setBang :: Env -> LIOFunction
-setBang env [LAtom var, form] = evalDeep env form >>= setVar env var
-setBang _   args              = throwError $ NumArgs 2 args
 
 define :: Env -> LIOFunction
 
@@ -205,61 +204,6 @@ lambda env (LList params:body)               = makeNormalFunc env params body
 lambda env (LDottedList params varargs:body) = makeVarargs varargs env params body
 lambda env (varargs@(LAtom _):body)          = makeVarargs varargs env []     body
 lambda _ args = throwError $ InvalidArgs "Bad lambda expression" args
-
-stringSetBang :: Env -> LIOFunction
-stringSetBang env args@[_, _, _] = mapM (evalOnce env) args >>= setStr
-  where
-    setStr :: LIOFunction
-    setStr [ptr, LNumber i, LChar c] = modifyPtrVal modifyStr ptr
-      where
-        modifyStr :: LispVal -> IOEvaled LispVal
-        modifyStr (LString str)
-          | fromIntegral i < length str = return . LString $ newStr str i c
-          | otherwise = throwError $ InvalidArgs "index for 'string-set!' exceeds string length" args
-        modifyStr _ = throwError badArgs
-    setStr _ = throwError badArgs
-
-    badArgs :: LispError
-    badArgs = InvalidArgs "'string-set!' expects mutable string, number and char" args
-
-    newStr :: (Integral a, Eq a) => String -> a -> Char -> String
-    newStr str i c =
-      let (hd, _:tl) = splitAt index str
-          index      = fromIntegral i :: Int
-      in  hd ++ c:tl
-stringSetBang _   args           = throwError $ NumArgs 3 args
-
-vectorSetBang :: Env -> LIOFunction
-vectorSetBang env args@[_, _, _] = mapM (evalOnce env) args >>= setVec
-  where
-    setVec :: LIOFunction
-    setVec [ptr, LNumber i, val] = modifyPtrVal modifyVec ptr
-      where
-        modifyVec :: LispVal -> IOEvaled LispVal
-        modifyVec (LVector vec)
-          | fromIntegral i < vectorLength vec = return . LVector $ vectorSet (fromIntegral i) val vec
-          | otherwise = throwError $ Default "index for 'vector-set!' exceeds vector length"
-        modifyVec _ = throwError badArgs
-    setVec _ = throwError badArgs
-
-    badArgs :: LispError
-    badArgs = InvalidArgs "'vector-set!' expects vector, number and object" args
-vectorSetBang _ args = throwError $ NumArgs 3 args
-
-vectorFillBang :: Env -> LIOFunction
-vectorFillBang env args@[_, _] = mapM (evalOnce env) args >>= fillVec
-  where
-    fillVec :: LIOFunction
-    fillVec [ptr, val] = modifyPtrVal modifyVec ptr
-      where
-        modifyVec :: LispVal -> IOEvaled LispVal
-        modifyVec (LVector vec) = return . LVector $ vectorFill val vec
-        modifyVec _             = throwError badArgs
-    fillVec _ = throwError badArgs
-
-    badArgs :: LispError
-    badArgs = InvalidArgs "'vector-fill!' expects vector and object" args
-vectorFillBang _ args = throwError $ NumArgs 3 args
 
 loadProc :: Env -> LIOFunction
 loadProc env [LString filename] = load filename >>= mapMLast (evalDeep env)
@@ -306,6 +250,105 @@ evalCase env (keyArg:clauses) = checkCases clauses
 
 evalCase _ args =
   throwError $ InvalidArgs "'case' excepts 'key' expression followed by 'clauses'" args
+
+setBang :: Env -> LIOFunction
+setBang env [LAtom var, form] = evalDeep env form >>= setVar env var
+setBang _   args              = throwError $ NumArgs 2 args
+
+stringSetBang :: Env -> LIOFunction
+stringSetBang env args@[_, _, _] = mapM (evalOnce env) args >>= setStr
+  where
+    setStr :: LIOFunction
+    setStr [ptr, LNumber i, LChar c] = modifyPtrVal modifyStr ptr
+      where
+        modifyStr :: LispVal -> IOEvaled LispVal
+        modifyStr (LString str)
+          | fromIntegral i < length str = return . LString $ newStr str i c
+          | otherwise = throwError $ InvalidArgs "index for 'string-set!' exceeds string length" args
+        modifyStr _ = throwError badArgs
+    setStr _ = throwError badArgs
+
+    badArgs :: LispError
+    badArgs = InvalidArgs "'string-set!' expects mutable string, number and char" args
+
+    newStr :: (Integral a, Eq a) => String -> a -> Char -> String
+    newStr str i c =
+      let (hd, _:tl) = splitAt index str
+          index      = fromIntegral i :: Int
+      in  hd ++ c:tl
+stringSetBang _   args           = throwError $ NumArgs 3 args
+
+setCarBang :: Env -> LIOFunction
+setCarBang env args@[_, _] = mapM (evalOnce env) args >>= setCar
+  where
+    setCar :: LIOFunction
+    setCar [ptr, newVal] = modifyPtrVal modifyList ptr
+      where
+        modifyList :: LispVal -> IOEvaled LispVal
+        modifyList (LList vs)          = LList <$> replaceHd newVal vs
+        modifyList (LDottedList hd tl) = (`LDottedList` tl) <$> replaceHd newVal hd
+        modifyList _                   = throwError badArgs
+
+    replaceHd :: LispVal -> [LispVal] -> IOEvaled [LispVal]
+    replaceHd v (_:vs) = return $ v:vs
+    replaceHd _ _      = throwError badArgs
+
+    badArgs :: LispError
+    badArgs = InvalidArgs "'set-car!' expects non-empty pair/list and an object" args
+setCarBang _ args = throwError $ NumArgs 2 args
+
+setCdrBang :: Env -> LIOFunction
+setCdrBang env args@[_, _] = mapM (evalOnce env) args >>= setCdr
+  where
+    setCdr :: LIOFunction
+    setCdr [ptr, newVal] = modifyPtrVal modifyList ptr
+      where
+        modifyList :: LispVal -> IOEvaled LispVal
+        modifyList (LList vs)         = replaceTl newVal vs
+        modifyList (LDottedList hd _) = replaceTl newVal hd
+        modifyList _                  = throwError badArgs
+
+    replaceTl :: LispVal -> [LispVal] -> IOEvaled LispVal
+    replaceTl v (hd:_) = case v of
+      LList vs          -> return $ LList (hd:vs)
+      LDottedList vs tl -> return $ LDottedList (hd:vs) tl
+      _                 -> return $ LDottedList [hd] v
+    replaceTl _ _      = throwError badArgs
+
+    badArgs :: LispError
+    badArgs = InvalidArgs "'set-cdr!' expects non-empty pair/list and an object" args
+
+vectorSetBang :: Env -> LIOFunction
+vectorSetBang env args@[_, _, _] = mapM (evalOnce env) args >>= setVec
+  where
+    setVec :: LIOFunction
+    setVec [ptr, LNumber i, val] = modifyPtrVal modifyVec ptr
+      where
+        modifyVec :: LispVal -> IOEvaled LispVal
+        modifyVec (LVector vec)
+          | fromIntegral i < vectorLength vec = return . LVector $ vectorSet (fromIntegral i) val vec
+          | otherwise = throwError $ Default "index for 'vector-set!' exceeds vector length"
+        modifyVec _ = throwError badArgs
+    setVec _ = throwError badArgs
+
+    badArgs :: LispError
+    badArgs = InvalidArgs "'vector-set!' expects vector, number and object" args
+vectorSetBang _ args = throwError $ NumArgs 3 args
+
+vectorFillBang :: Env -> LIOFunction
+vectorFillBang env args@[_, _] = mapM (evalOnce env) args >>= fillVec
+  where
+    fillVec :: LIOFunction
+    fillVec [ptr, val] = modifyPtrVal modifyVec ptr
+      where
+        modifyVec :: LispVal -> IOEvaled LispVal
+        modifyVec (LVector vec) = return . LVector $ vectorFill val vec
+        modifyVec _             = throwError badArgs
+    fillVec _ = throwError badArgs
+
+    badArgs :: LispError
+    badArgs = InvalidArgs "'vector-fill!' expects vector and object" args
+vectorFillBang _ args = throwError $ NumArgs 3 args
 
 eqv :: Env -> LIOFunction
 eqv env [arg1, arg2] = do

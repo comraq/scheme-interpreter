@@ -33,7 +33,6 @@
 (define negative?           (curry > 0))
 (define (odd? num)          (= (mod num 2) 1))
 (define (even? num)         (not (odd? num)))
-(define (list . objs)       objs)
 (define (sum . lst)         (fold + 0 lst))
 (define (product . lst)     (fold * 1 lst))
 (define (and . lst)         (fold && #t lst))
