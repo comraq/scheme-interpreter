@@ -110,7 +110,7 @@ callFunc env func args = evalDeep env func >>= funcApply
 
 apply :: LispVal -> LIOFunction
 apply (LPrimitiveFunc _ f)                      args = liftEvaled (f args) >>= liftPtr
-apply (LIOFunc _ f)                             args = f args >>= liftPtr
+apply (LIOFunc _ f)                             args = f args
 apply (LLambdaFunc params varargs body closure) args
   | isNothing varargs && num params /= num args = throwError $ NumArgs (num params) args
   | num params > num args                       = throwError $ NumArgs (num params) args
@@ -143,14 +143,6 @@ apply (LLambdaFunc params varargs body closure) args
     remainingArgs = drop (length params) args
 
 apply expr _ = throwError . NotFunction "Trying to call non-function" $ show expr
-
-liftPtr :: LispVal -> IOEvaled LispVal
-liftPtr val = case val of
-  LString _       -> liftIO $ toPtrVal val
-  LList _         -> liftIO $ toPtrVal val
-  LDottedList _ _ -> liftIO $ toPtrVal val
-  LVector _       -> liftIO $ toPtrVal val
-  _               -> return val
 
 
 ------- Environment with all Function Preset Bindings -------
@@ -194,7 +186,6 @@ envFunctions =
 
   , ("eq?"            , eqv          )
   , ("eqv?"           , eqv          )
-  , ("symbol->string" , atomToString )
   ]
 
 define :: Env -> LIOFunction
@@ -371,12 +362,6 @@ eqv env [arg1, arg2] = do
   b <- evalOnce env arg2
   return . LBool $ a == b
 eqv _   args         = throwError $ NumArgs 2 args
-
-atomToString :: Env -> LIOFunction
-atomToString env args = mapM (evalDeep env) args >>= go
-  where go :: LIOFunction
-        go [LAtom a] = return $ LString a
-        go vals      = throwError $ NumArgs 1 vals
 
 
 ------- Utility Functions -------

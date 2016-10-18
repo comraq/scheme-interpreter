@@ -1,4 +1,4 @@
-module IOFunction (ioFunctions, load) where
+module IOFunction (ioFunctions, load, liftPtr) where
 
 import Control.Monad.Except
 import System.IO
@@ -11,6 +11,14 @@ import Variable
 
 load :: String -> IOEvaled [LispVal]
 load filename = liftIO (readFile filename) >>= liftEvaled . readExprList
+
+liftPtr :: LispVal -> IOEvaled LispVal
+liftPtr val = case val of
+  LString _       -> liftIO $ toPtrVal val
+  LList _         -> liftIO $ toPtrVal val
+  LDottedList _ _ -> liftIO $ toPtrVal val
+  LVector _       -> liftIO $ toPtrVal val
+  _               -> return val
 
 ------- IO Primitive Functions -------
 
@@ -26,6 +34,8 @@ ioFunctions =
   , ("write"             , writeProc          )
   , ("read-contents"     , readContents       )
   , ("read-all"          , readAll            )
+
+  , ("symbol->string" , atomToString )
   ]
 
 makePort :: IOMode -> LIOFunction
@@ -39,7 +49,7 @@ closePort _            = return $ LBool False
 
 readProc :: LIOFunction
 readProc []           = readProc [LPort stdin]
-readProc [LPort port] = liftIO (hGetLine port) >>= liftEvaled . readExpr
+readProc [LPort port] = liftIO (hGetLine port) >>= liftEvaled . readExpr >>= liftPtr
 readProc args         = throwError $ NumArgs 1 args
 
 writeProc :: LIOFunction
@@ -49,9 +59,13 @@ writeProc [obj, LPort port] = liftIO $  hPrint port obj
 writeProc args              = throwError $ InvalidArgs "Invalid arguments to 'write'" args
 
 readContents :: LIOFunction
-readContents [LString filename] = LString <$> liftIO (readFile filename)
+readContents [LString filename] = liftIO $ LString <$> readFile filename >>= toPtrVal
 readContents args               = throwError $ NumArgs 1 args
 
 readAll :: LIOFunction
-readAll [LString filename] = LList <$> load filename
+readAll [LString filename] = fmap LList (load filename) >>= liftIO . toPtrVal
 readAll args               = throwError $ NumArgs 1 args
+
+atomToString :: LIOFunction
+atomToString [LAtom a] = return $ LString a
+atomToString args      = throwError $ NumArgs 1 args
