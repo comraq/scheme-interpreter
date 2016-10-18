@@ -109,8 +109,8 @@ callFunc env func args = evalDeep env func >>= funcApply
     funcApply f                = mapM (evalDeep env) args >>= apply f
 
 apply :: LispVal -> LIOFunction
-apply (LPrimitiveFunc _ f)                      args = liftEvaled $ f args
-apply (LIOFunc _ f)                             args = f args
+apply (LPrimitiveFunc _ f)                      args = liftEvaled (f args) >>= liftPtr
+apply (LIOFunc _ f)                             args = f args >>= liftPtr
 apply (LLambdaFunc params varargs body closure) args
   | isNothing varargs && num params /= num args = throwError $ NumArgs (num params) args
   | num params > num args                       = throwError $ NumArgs (num params) args
@@ -125,6 +125,7 @@ apply (LLambdaFunc params varargs body closure) args
       -- Evals all expressions in the body and
       -- returns the results of the last expression
       >>= evalBody
+      >>= liftPtr
 
   where
     num :: [a] -> Int
@@ -142,6 +143,14 @@ apply (LLambdaFunc params varargs body closure) args
     remainingArgs = drop (length params) args
 
 apply expr _ = throwError . NotFunction "Trying to call non-function" $ show expr
+
+liftPtr :: LispVal -> IOEvaled LispVal
+liftPtr val = case val of
+  LString _       -> liftIO $ toPtrVal val
+  LList _         -> liftIO $ toPtrVal val
+  LDottedList _ _ -> liftIO $ toPtrVal val
+  LVector _       -> liftIO $ toPtrVal val
+  _               -> return val
 
 
 ------- Environment with all Function Preset Bindings -------
@@ -168,23 +177,24 @@ primitiveEnv = emptyEnv >>= (`mBindVars` (primFuncs ++ envFuncs ++ ioFuncs))
 
 envFunctions :: [(LFuncName, Env -> LIOFunction)]
 envFunctions =
-  [ ("define"      , define         )
-  , ("lambda"      , lambda         )
-  , ("load"        , loadProc       )
-  , ("if"          , evalIf         )
-  , ("cond"        , evalCond       )
-  , ("case"        , evalCase       )
+  [ ("define" , define    )
+  , ("lambda" , lambda    )
+  , ("apply"  , applyProc )
+  , ("load"   , loadProc  )
+  , ("if"     , evalIf    )
+  , ("cond"   , evalCond  )
+  , ("case"   , evalCase  )
 
-  , ("set!"        , setBang        )
-  , ("string-set!" , stringSetBang  )
-  , ("set-car!"    , setCarBang     )
-  , ("set-cdr!"    , setCdrBang     )
-  , ("vector-set!" , vectorSetBang  )
-  , ("vector-fill!", vectorFillBang )
+  , ("set!"         , setBang        )
+  , ("string-set!"  , stringSetBang  )
+  , ("set-car!"     , setCarBang     )
+  , ("set-cdr!"     , setCdrBang     )
+  , ("vector-set!"  , vectorSetBang  )
+  , ("vector-fill!" , vectorFillBang )
 
-  , ("eq?"         , eqv            )
-  , ("eqv?"        , eqv            )
-  , ("apply"       , applyProc      )
+  , ("eq?"            , eqv          )
+  , ("eqv?"           , eqv          )
+  , ("symbol->string" , atomToString )
   ]
 
 define :: Env -> LIOFunction
@@ -204,6 +214,11 @@ lambda env (LList params:body)               = makeNormalFunc env params body
 lambda env (LDottedList params varargs:body) = makeVarargs varargs env params body
 lambda env (varargs@(LAtom _):body)          = makeVarargs varargs env []     body
 lambda _ args = throwError $ InvalidArgs "Bad lambda expression" args
+
+applyProc :: Env -> LIOFunction
+applyProc env [func, LList args] = callFunc env func args
+applyProc env (func : args)      = callFunc env func args
+applyProc _   _                  = throwError $ InvalidArgs "Invalid arguments to 'apply'" []
 
 loadProc :: Env -> LIOFunction
 loadProc env [LString filename] = load filename >>= mapMLast (evalDeep env)
@@ -357,10 +372,11 @@ eqv env [arg1, arg2] = do
   return . LBool $ a == b
 eqv _   args         = throwError $ NumArgs 2 args
 
-applyProc :: Env -> LIOFunction
-applyProc env [func, LList args] = callFunc env func args
-applyProc env (func : args)      = callFunc env func args
-applyProc _   _                  = throwError $ InvalidArgs "Invalid arguments to 'apply'" []
+atomToString :: Env -> LIOFunction
+atomToString env args = mapM (evalDeep env) args >>= go
+  where go :: LIOFunction
+        go [LAtom a] = return $ LString a
+        go vals      = throwError $ NumArgs 1 vals
 
 
 ------- Utility Functions -------

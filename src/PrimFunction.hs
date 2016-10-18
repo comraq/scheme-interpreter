@@ -17,64 +17,72 @@ primitiveFunctions :: [(String, LFunction)]
 primitiveFunctions =
   [
   -- Numeric Operations
-    ("+",         numericBinop (+)  )
-  , ("-",         numericBinop (-)  )
-  , ("*",         numericBinop (*)  )
-  , ("/",         numericBinop (/)  )
-  , ("div",       numericBinop div  )
-  , ("mod",       numericBinop mod  )
-  , ("quotient",  numericBinop quot )
-  , ("remainder", numericBinop rem  )
+    ("+"         , numericBinop (+)  )
+  , ("-"         , numericBinop (-)  )
+  , ("*"         , numericBinop (*)  )
+  , ("/"         , numericBinop (/)  )
+  , ("div"       , numericBinop div  )
+  , ("mod"       , numericBinop mod  )
+  , ("quotient"  , numericBinop quot )
+  , ("remainder" , numericBinop rem  )
 
   -- Operations Resulting in Boolean Equalities
-  , ("=",            numBoolBinop (==) )
-  , ("<",            numBoolBinop (<)  )
-  , (">",            numBoolBinop (>)  )
-  , ("/=",           numBoolBinop (/=) )
-  , (">=",           numBoolBinop (>=) )
-  , ("<=",           numBoolBinop (<=) )
-  , ("&&",           boolBoolBinop (&&))
-  , ("||",           boolBoolBinop (||))
-  , ("string=?",     strBoolBinop id (==) )
-  , ("string<=?",    strBoolBinop id (<=) )
-  , ("string>=?",    strBoolBinop id (>=) )
-  , ("string<?",     strBoolBinop id (<)  )
-  , ("string>?",     strBoolBinop id (>)  )
-  , ("string-ci=?",  strBoolBinop (map toLower) (==) )
-  , ("string-ci<=?", strBoolBinop (map toLower) (<=) )
-  , ("string-ci>=?", strBoolBinop (map toLower) (>=) )
-  , ("string-ci<?",  strBoolBinop (map toLower) (<)  )
-  , ("string-ci>?",  strBoolBinop (map toLower) (>)  )
-  , ("equal?",       equal             )
+  , ("="            , numBoolBinop (==)               )
+  , ("<"            , numBoolBinop (<)                )
+  , (">"            , numBoolBinop (>)                )
+  , ("/="           , numBoolBinop (/=)               )
+  , (">="           , numBoolBinop (>=)               )
+  , ("<="           , numBoolBinop (<=)               )
+  , ("&&"           , boolBoolBinop (&&)              )
+  , ("||"           , boolBoolBinop (||)              )
+  , ("string=?"     , strBoolBinop id (==)            )
+  , ("string<=?"    , strBoolBinop id (<=)            )
+  , ("string>=?"    , strBoolBinop id (>=)            )
+  , ("string<?"     , strBoolBinop id (<)             )
+  , ("string>?"     , strBoolBinop id (>)             )
+  , ("string-ci=?"  , strBoolBinop (map toLower) (==) )
+  , ("string-ci<=?" , strBoolBinop (map toLower) (<=) )
+  , ("string-ci>=?" , strBoolBinop (map toLower) (>=) )
+  , ("string-ci<?"  , strBoolBinop (map toLower) (<)  )
+  , ("string-ci>?"  , strBoolBinop (map toLower) (>)  )
+  , ("equal?"       , equal                           )
 
   -- Lists/Pairs
-  , ("car",    car        )
-  , ("cdr",    cdr        )
-  , ("cons",   cons       )
+  , ("car"  , car  )
+  , ("cdr"  , cdr  )
+  , ("cons" , cons )
 
   -- Type Testing
-  , ("string?",    isLString   )
-  , ("number?",    isLNumber   )
-  , ("symbol?",    isLAtom     )
-  , ("boolean?",   isLBoolean  )
-  , ("char?",      isLChar     )
-  , ("port?",      isLPort     )
-  , ("pair?",      isPair      )
-  , ("vector?",    isLVector   )
-  , ("procedure?", isProcedure )
-  , ("list?",      isLList     )
+  , ("string?"    , isLString   )
+  , ("number?"    , isLNumber   )
+  , ("symbol?"    , isLAtom     )
+  , ("boolean?"   , isLBoolean  )
+  , ("char?"      , isLChar     )
+  , ("port?"      , isLPort     )
+  , ("pair?"      , isPair      )
+  , ("vector?"    , isLVector   )
+  , ("procedure?" , isProcedure )
+  , ("list?"      , isLList     )
 
   -- Symbol Handling
-  , ("symbol->string", atomToString )
-  , ("string->symbol", stringToAtom )
+  , ("string->symbol" , stringToAtom )
 
   -- String Functions
-  , ("string-length", stringLength )
-  , ("string-ref",    stringRef    )
+  , ("make-string"   , makeString   )
+  , ("substring"     , substring    )
+  , ("string-append" , stringAppend )
+  , ("list->string"  , listToString )
+  , ("string->list"  , stringToList )
+  , ("string-length" , stringLength )
+  , ("string-ref"    , stringRef    )
 
   -- Vector Functions,
-  , ("vector-length", vectorLength )
-  , ("vector-ref",    vectorRef    )
+  , ("vector"        , vector       )
+  , ("make-vector"   , makeVector   )
+  , ("list->vector"  , listToVector )
+  , ("vector->list"  , vectorToList )
+  , ("vector-length" , vectorLength )
+  , ("vector-ref"    , vectorRef    )
   ]
 
 
@@ -229,12 +237,7 @@ isProcedure [_]                  = return $ LBool False
 isProcedure vals                 = throwError $ NumArgs 1 vals
 
 
-
 ------- Symbol Handling -------
-
-atomToString :: LFunction
-atomToString [LAtom a] = return $ LString a
-atomToString vals      = throwError $ NumArgs 1 vals
 
 stringToAtom :: LFunction
 stringToAtom [LString s] = return $ LAtom s
@@ -242,6 +245,41 @@ stringToAtom vals        = throwError $ NumArgs 1 vals
 
 
 ------- String Functions -------
+
+makeString :: LFunction
+makeString args = case args of
+    [LNumber n]          -> return $ mkStr (fromIntegral n, ' ')
+    [LNumber n, LChar c] -> return $ mkStr (fromIntegral n, c)
+    _                    -> throwError $ NumArgs 1 args
+
+  where mkStr :: (Int, Char) -> LispVal
+        mkStr = LString . uncurry replicate
+
+substring :: LFunction
+substring [LString str, LNumber start, LNumber end] =
+  let startI = fromIntegral $ toInteger start
+      sublen = fromIntegral (toInteger end) - startI
+  in  return . LString . take sublen . drop startI $ str
+substring args = throwError $ NumArgs 3 args
+
+stringAppend :: LFunction
+stringAppend = go
+  where go :: LFunction
+        go []               = return $ LString ""
+        go (LString s:strs) = (\(LString s') -> LString $ s ++ s') <$> go strs
+        go args             = throwError $ InvalidArgs "Expected string list" args
+
+listToString :: LFunction
+listToString [LList vals] = LString <$> toString vals
+  where toString :: [LispVal] -> Evaled String
+        toString []            = return ""
+        toString (LChar c:lvs) = (c:) <$> toString lvs
+        toString args          = throwError $ InvalidArgs "Expected a char list" args
+listToString args         = throwError $ InvalidArgs "Expected a char list" args
+
+stringToList :: LFunction
+stringToList [LString s] = return . LList $ map LChar s
+stringToList args        = throwError $ InvalidArgs "Expected string" args
 
 stringLength :: LFunction
 stringLength [LString s]     = return . LNumber . SInt . toInteger $ length s
@@ -257,6 +295,23 @@ stringRef args = throwError $ NumArgs 2 args
 
 
 ------- Vector Functions -------
+
+vector :: LFunction
+vector args = return . LVector $ V.vector args
+
+makeVector :: LFunction
+makeVector [LNumber n] = return . LVector $ V.makeVector (fromIntegral n) (LBool False)
+makeVector [LNumber n, val] = return . LVector $ V.makeVector (fromIntegral n) val
+makeVector args =
+  throwError $ InvalidArgs "Expected vector length and optional fill value" args
+
+vectorToList :: LFunction
+vectorToList [LVector v] = return . LList $ V.vectorToList v
+vectorToList args        = throwError $ NumArgs 1 args
+
+listToVector :: LFunction
+listToVector [LList vals] = vector vals
+listToVector args         = throwError $ NumArgs 1 args
 
 vectorLength :: LFunction
 vectorLength [LVector v] = return . LNumber . SInt . toInteger $ V.vectorLength v
