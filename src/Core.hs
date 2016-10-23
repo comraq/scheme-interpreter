@@ -4,6 +4,7 @@ module Core (eval, primitiveEnv) where
 
 import Control.Arrow ((&&&), first)
 import Control.Monad.Except
+import Control.Monad.Reader
 import Data.Maybe (fromMaybe, isNothing)
 
 import Definition
@@ -20,39 +21,42 @@ type QuasiquoteCont = LispVal -> IOEvaled LispVal
 
 
 eval :: Env -> LispVal -> IOEvaled LispVal
-eval env expr = evalDeep env expr >>= derefPtrValSafe
+eval env expr = runReaderT (evalDeep expr) env >>= derefPtrValSafe
 
-evalDeep :: Env -> LispVal -> IOEvaled LispVal
-evalDeep env (LAtom var)           = getVarDeep env var
-evalDeep _   var@(LNumber _)       = return var
-evalDeep _   var@(LString _)       = return var
-evalDeep _   var@(LBool _)         = return var
-evalDeep _   var@(LChar _)         = return var
+evalDeep :: LispVal -> EnvEvaled LispVal
+evalDeep (LAtom var)           = liftIOEvaled $ getVarDeep var
+evalDeep var@(LNumber _)       = return var
+evalDeep var@(LString _)       = return var
+evalDeep var@(LBool _)         = return var
+evalDeep var@(LChar _)         = return var
 
-evalDeep env var@(LPointer _)      = derefPtrVal var
+evalDeep var@(LPointer _)      = lift $ derefPtrVal var
 
-evalDeep env val@(LList lvs)       = case lvs of
+evalDeep val@(LList lvs)       = case lvs of
   -- Special Lists
   [LAtom "quote",      vs] -> return vs
-  [LAtom "quasiquote", vs] -> evalQuasiquote env vs
+  [LAtom "quasiquote", vs] -> evalQuasiquote vs
 
   -- Eval as a Function
-  (func : args) -> callFunc env func args
+  (func : args) -> callFunc func args
 
-evalDeep _   var@(LDottedList _ _) = throwError $ BadSpecialForm "Literal dotted lists must be quoted!" var
-evalDeep _   var@(LVector _)       = throwError $ BadSpecialForm "Literal vectors must be quoted!" var
-evalDeep _   badForm               = throwError $ BadSpecialForm "Unrecognized special form" badForm
+evalDeep var@(LDottedList _ _) = liftThrowErr $ BadSpecialForm "Literal dotted lists must be quoted!" var
+evalDeep var@(LVector _)       = liftThrowErr $ BadSpecialForm "Literal vectors must be quoted!" var
+evalDeep badForm               = liftThrowErr $ BadSpecialForm "Unrecognized special form" badForm
 
-evalOnce :: Env -> LispVal -> IOEvaled LispVal
-evalOnce env (LAtom var) = getVar env var
-evalOnce env var         = evalDeep env var
+evalOnce :: LispVal -> EnvEvaled LispVal
+evalOnce (LAtom var) = liftIOEvaled $ getVar var
+evalOnce var         = evalDeep var
 
-evalQuasiquote :: Env -> LispVal -> IOEvaled LispVal
-evalQuasiquote env lispval = case lispval of
+evalQuasiquote :: LispVal -> EnvEvaled LispVal
+evalQuasiquote lispval = case lispval of
     LList [LAtom "unquote-splicing", _] ->
-      throwError $ BadSpecialForm "unquote-splicing found outside of list" lispval
+      liftThrowErr $ BadSpecialForm "unquote-splicing found outside of list" lispval
 
-    _ -> evalUnquotedCont (evalDeep env) lispval
+    _ -> do
+      env <- ask
+      let cont val = runReaderT (evalDeep val) env
+      lift $ evalUnquotedCont cont lispval
 
 evalUnquotedListCont :: QuasiquoteCont -> [LispVal] -> IOEvaled ([LispVal], Maybe LispVal)
 evalUnquotedListCont cont [ LList [LAtom "unquote-splicing", expr] ] = do
@@ -100,16 +104,17 @@ evalUnquotedCont _    lispval = return lispval
 
 ------- Calling and Getting Scheme Functions -------
 
-callFunc :: Env -> LispVal -> LIOFunction
-callFunc env func args = evalDeep env func >>= funcApply
+callFunc :: LispVal -> LEnvFunction
+callFunc func args = evalDeep func >>= funcApply
   where
-    funcApply :: LispVal -> IOEvaled LispVal
-    funcApply (LEnvFunc _ f)   = f env args
-    funcApply f@LLambdaFunc {} = mapM (evalOnce env) args >>= apply f
-    funcApply f                = mapM (evalDeep env) args >>= apply f
+    funcApply :: LispVal -> EnvEvaled LispVal
+    funcApply (LEnvFunc _ f)   = f args
+    funcApply f@LLambdaFunc {} = mapM evalOnce args >>= lift . apply f
+    funcApply f                = mapM evalDeep args >>= lift . apply f
 
 apply :: LispVal -> LIOFunction
-apply (LPrimitiveFunc _ f)                      args = liftEvaled (f args) >>= liftPtr
+apply (LPrimitiveFunc _ f)                      args =
+  mapM derefPtrValSafe args >>= liftEvaled . f >>= liftPtr
 apply (LIOFunc _ f)                             args = f args
 apply (LLambdaFunc params varargs body closure) args
   | isNothing varargs && num params /= num args = throwError $ NumArgs (num params) args
@@ -132,7 +137,7 @@ apply (LLambdaFunc params varargs body closure) args
     num = length
 
     evalBody :: Env -> IOEvaled LispVal
-    evalBody env = mapMLast (evalDeep env) body
+    evalBody = runReaderT (evalExprs body)
 
     bindVarArgs :: Maybe String -> Env -> IOEvaled Env
     bindVarArgs Nothing        env = return env
@@ -167,7 +172,7 @@ primitiveEnv = emptyEnv >>= (`mBindVars` (primFuncs ++ envFuncs ++ ioFuncs))
 
 ------ Environment Interacting Functions -------
 
-envFunctions :: [(LFuncName, Env -> LIOFunction)]
+envFunctions :: [(LFuncName, LEnvFunction)]
 envFunctions =
   [ ("define" , define    )
   , ("lambda" , lambda    )
@@ -184,85 +189,82 @@ envFunctions =
   , ("vector-set!"  , vectorSetBang  )
   , ("vector-fill!" , vectorFillBang )
 
-  , ("eq?"            , eqv          )
-  , ("eqv?"           , eqv          )
+  , ("eq?"  , eqv )
+  , ("eqv?" , eqv )
   ]
 
-define :: Env -> LIOFunction
+define :: LEnvFunction
+define args = case args of
+    -- 'define' a function binding
+    LList (LAtom fnName:params):body               -> makeNormalFunc params body >>= defineBinding fnName
+    LDottedList (LAtom fnName:params) varargs:body -> makeVarargs varargs params body >>= defineBinding fnName
 
--- 'define' a function binding
-define env (LList (LAtom func:params):body) =
-  makeNormalFunc env params body >>= liftIO . defineVar env func
-define env (LDottedList (LAtom func:params) varargs:body) =
-  makeVarargs varargs env params body >>= liftIO . defineVar env func
+    -- 'define' a variable binding
+    [LAtom var, form]                              -> evalOnce form >>= defineBinding var
+    _                                              -> liftThrowErr $ NumArgs 2 args
 
--- 'define' a variable binding
-define env [LAtom var, form] = evalOnce env form >>= liftIO . defineVar env var
-define _   args              = throwError $ NumArgs 2 args
+  where defineBinding :: VarName -> LispVal -> EnvEvaled LispVal
+        defineBinding name val = ask >>= liftIO . defineVar name val
 
-lambda :: Env -> LIOFunction
-lambda env (LList params:body)               = makeNormalFunc env params body
-lambda env (LDottedList params varargs:body) = makeVarargs varargs env params body
-lambda env (varargs@(LAtom _):body)          = makeVarargs varargs env []     body
-lambda _ args = throwError $ InvalidArgs "Bad lambda expression" args
+lambda :: LEnvFunction
+lambda (LList params:body)               = makeNormalFunc params body
+lambda (LDottedList params varargs:body) = makeVarargs varargs params body
+lambda (varargs@(LAtom _):body)          = makeVarargs varargs []     body
+lambda args = liftThrowErr $ InvalidArgs "Bad lambda expression" args
 
-applyProc :: Env -> LIOFunction
-applyProc env [func, LList args] = callFunc env func args
-applyProc env (func : args)      = callFunc env func args
-applyProc _   _                  = throwError $ InvalidArgs "Invalid arguments to 'apply'" []
+applyProc :: LEnvFunction
+applyProc [func, LList args] = callFunc func args
+applyProc (func : args)      = callFunc func args
+applyProc _                  = liftThrowErr $ InvalidArgs "Invalid arguments to 'apply'" []
 
-loadProc :: Env -> LIOFunction
-loadProc env [LString filename] = load filename >>= mapMLast (evalDeep env)
-loadProc _   args               = throwError $ NumArgs 1 args
+loadProc :: LEnvFunction
+loadProc [LString filename] = lift (load filename) >>= evalExprs
 
-evalIf :: Env -> LIOFunction
-evalIf env [pred, conseq, alt] = fmap unpackBoolCoerce (evalDeep env pred) >>= \bool ->
-  evalDeep env $ if bool then conseq else alt
-evalIf _   args = throwError $ NumArgs 3 args
+evalIf :: LEnvFunction
+evalIf [pred, conseq, alt] = fmap unpackBoolCoerce (evalDeep pred) >>= \bool ->
+  evalDeep $ if bool then conseq else alt
+evalIf args = liftThrowErr $ NumArgs 3 args
 
-evalCond :: Env -> LIOFunction
-evalCond env = go
+evalCond :: LEnvFunction
+evalCond (LList (LAtom "else":exprs):_)    = evalExprs exprs
+evalCond (LList [val, LAtom "=>", expr]:_) = evalDeep expr >>= (`callFunc` [val])
+evalCond (LList [pred]:_)          = evalDeep pred
+evalCond (LList (pred:exprs):rest) =
+  fmap unpackBoolCoerce (evalDeep pred) >>= \bool ->
+    if bool
+      then evalExprs exprs
+      else evalCond rest
+evalCond args = liftThrowErr $ InvalidArgs "No true condition for 'cond'" args
+
+evalCase :: LEnvFunction
+evalCase (keyArg:clauses) = checkCases clauses
   where
-    go :: LIOFunction
-    go (LList (LAtom "else":exprs):_)    = evalExprs env exprs
-    go (LList [val, LAtom "=>", expr]:_) = evalDeep env expr >>= callAsFunc
-      where callAsFunc :: LispVal -> IOEvaled LispVal
-            callAsFunc expr = callFunc env expr [val]
-
-    go (LList [pred]:_)          = evalDeep env pred
-    go (LList (pred:exprs):rest) = fmap unpackBoolCoerce (evalDeep env pred) >>= \bool ->
-      if bool
-        then evalExprs env exprs
-        else go rest
-    go args = throwError $ InvalidArgs "No true condition for 'cond'" args
-
-evalCase :: Env -> LIOFunction
-evalCase env (keyArg:clauses) = checkCases clauses
-  where
-    checkCases :: LIOFunction
-    checkCases (LList (LAtom "else":exprs):clauses) = evalExprs env exprs
+    checkCases :: LEnvFunction
+    checkCases (LList (LAtom "else":exprs):clauses) = evalExprs exprs
     checkCases (LList (LList keys  :exprs):clauses) =
-      evalDeep env keyArg >>= (`matchKey` keys) >>= \match ->
+      evalDeep keyArg >>= (`matchKey` keys) >>= \match ->
         if match
-          then evalExprs env exprs
+          then evalExprs exprs
           else checkCases clauses
     checkCases (_:clauses) = checkCases clauses
-    checkCases [] = throwError $ Default "Exhausted datum matches in 'case'"
+    checkCases [] = liftThrowErr $ Default "Exhausted datum matches in 'case'"
 
-    matchKey :: LispVal -> [LispVal] -> IOEvaled Bool
+    matchKey :: LispVal -> [LispVal] -> EnvEvaled Bool
     matchKey _   []       = return False
-    matchKey key (v:vals) = eqv env [key, v] >>= \(LBool bool) ->
-      if bool then return bool else matchKey key vals
+    matchKey key (v:vals) = eqv [key, v] >>= \(LBool bool) ->
+      if bool
+        then return bool
+        else matchKey key vals
 
-evalCase _ args =
-  throwError $ InvalidArgs "'case' excepts 'key' expression followed by 'clauses'" args
+evalCase args =
+  liftThrowErr $ InvalidArgs "'case' excepts 'key' expression followed by 'clauses'" args
 
-setBang :: Env -> LIOFunction
-setBang env [LAtom var, form] = evalDeep env form >>= setVar env var
-setBang _   args              = throwError $ NumArgs 2 args
+setBang :: LEnvFunction
+setBang [LAtom var, form] = evalDeep form >>= liftIOEvaled . setVar var
+setBang args              = liftThrowErr $ NumArgs 2 args
 
-stringSetBang :: Env -> LIOFunction
-stringSetBang env args@[_, _, _] = mapM (evalOnce env) args >>= setStr
+stringSetBang :: LEnvFunction
+stringSetBang args@[_, _, _] = mapM evalOnce args >>= lift . setStr
   where
     setStr :: LIOFunction
     setStr [ptr, LNumber i, LChar c] = modifyPtrVal modifyStr ptr
@@ -282,10 +284,10 @@ stringSetBang env args@[_, _, _] = mapM (evalOnce env) args >>= setStr
       let (hd, _:tl) = splitAt index str
           index      = fromIntegral i :: Int
       in  hd ++ c:tl
-stringSetBang _   args           = throwError $ NumArgs 3 args
+stringSetBang args           = liftThrowErr $ NumArgs 3 args
 
-setCarBang :: Env -> LIOFunction
-setCarBang env args@[_, _] = mapM (evalOnce env) args >>= setCar
+setCarBang :: LEnvFunction
+setCarBang args@[_, _] = mapM evalOnce args >>= lift . setCar
   where
     setCar :: LIOFunction
     setCar [ptr, newVal] = modifyPtrVal modifyList ptr
@@ -301,10 +303,10 @@ setCarBang env args@[_, _] = mapM (evalOnce env) args >>= setCar
 
     badArgs :: LispError
     badArgs = InvalidArgs "'set-car!' expects non-empty pair/list and an object" args
-setCarBang _ args = throwError $ NumArgs 2 args
+setCarBang args = liftThrowErr $ NumArgs 2 args
 
-setCdrBang :: Env -> LIOFunction
-setCdrBang env args@[_, _] = mapM (evalOnce env) args >>= setCdr
+setCdrBang :: LEnvFunction
+setCdrBang args@[_, _] = mapM evalOnce args >>= lift . setCdr
   where
     setCdr :: LIOFunction
     setCdr [ptr, newVal] = modifyPtrVal modifyList ptr
@@ -323,9 +325,10 @@ setCdrBang env args@[_, _] = mapM (evalOnce env) args >>= setCdr
 
     badArgs :: LispError
     badArgs = InvalidArgs "'set-cdr!' expects non-empty pair/list and an object" args
+setCdrBang args = liftThrowErr $ NumArgs 3 args
 
-vectorSetBang :: Env -> LIOFunction
-vectorSetBang env args@[_, _, _] = mapM (evalOnce env) args >>= setVec
+vectorSetBang :: LEnvFunction
+vectorSetBang args@[_, _, _] = mapM evalOnce args >>= lift . setVec
   where
     setVec :: LIOFunction
     setVec [ptr, LNumber i, val] = modifyPtrVal modifyVec ptr
@@ -339,10 +342,10 @@ vectorSetBang env args@[_, _, _] = mapM (evalOnce env) args >>= setVec
 
     badArgs :: LispError
     badArgs = InvalidArgs "'vector-set!' expects vector, number and object" args
-vectorSetBang _ args = throwError $ NumArgs 3 args
+vectorSetBang args = throwError $ NumArgs 3 args
 
-vectorFillBang :: Env -> LIOFunction
-vectorFillBang env args@[_, _] = mapM (evalOnce env) args >>= fillVec
+vectorFillBang :: LEnvFunction
+vectorFillBang args@[_, _] = mapM evalOnce args >>= lift . fillVec
   where
     fillVec :: LIOFunction
     fillVec [ptr, val] = modifyPtrVal modifyVec ptr
@@ -354,14 +357,14 @@ vectorFillBang env args@[_, _] = mapM (evalOnce env) args >>= fillVec
 
     badArgs :: LispError
     badArgs = InvalidArgs "'vector-fill!' expects vector and object" args
-vectorFillBang _ args = throwError $ NumArgs 3 args
+vectorFillBang args = liftThrowErr $ NumArgs 3 args
 
-eqv :: Env -> LIOFunction
-eqv env [arg1, arg2] = do
-  a <- evalOnce env arg1
-  b <- evalOnce env arg2
+eqv :: LEnvFunction
+eqv [arg1, arg2] = do
+  a <- evalOnce arg1
+  b <- evalOnce arg2
   return . LBool $ a == b
-eqv _   args         = throwError $ NumArgs 2 args
+eqv args         = liftThrowErr $ NumArgs 2 args
 
 
 ------- Utility Functions -------
@@ -370,18 +373,26 @@ eqv _   args         = throwError $ NumArgs 2 args
  - Evaluates all lispval expressions only returning the result of the last
  - evaluated lispval
  -}
-evalExprs :: Env -> LIOFunction
-evalExprs env = mapMLast (evalDeep env)
+evalExprs :: LEnvFunction
+evalExprs = mapMLast evalDeep
 
-makeFunc :: Maybe String -> Env -> [LispVal] -> LIOFunction
-makeFunc varargs env params body =
+makeFunc :: Maybe String -> [LispVal] -> [LispVal] -> Env -> IOEvaled LispVal
+makeFunc varargs params body env =
   liftIO . toPtrVal $ LLambdaFunc (map show params) varargs body env
 
-makeNormalFunc :: Env -> [LispVal] -> LIOFunction
-makeNormalFunc = makeFunc Nothing
+makeNormalFunc :: [LispVal] -> LEnvFunction
+makeNormalFunc params body = liftIOEvaled $ makeFunc Nothing params body
 
-makeVarargs :: LispVal -> Env -> [LispVal] -> LIOFunction
-makeVarargs = makeFunc . Just . show
+makeVarargs :: LispVal -> [LispVal] -> LEnvFunction
+makeVarargs vararg params body =
+  let varargs = Just $ show vararg
+  in  liftIOEvaled $ makeFunc varargs params body
 
 mapMLast :: Monad m => (a -> m b) -> [a] -> m b
 mapMLast f = fmap last . mapM f
+
+liftThrowErr :: LispError -> EnvEvaled a
+liftThrowErr = lift . throwError
+
+liftIOEvaled :: (Env -> IOEvaled a) -> EnvEvaled a
+liftIOEvaled f = ask >>= lift . f

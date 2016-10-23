@@ -14,12 +14,15 @@ module Definition
 
   , Evaled
   , IOEvaled
+  , EnvEvaled
 
   , LIOFunction
+  , LEnvFunction
   ) where
 
 import Control.Arrow
 import Control.Monad.Except
+import Control.Monad.Reader
 import Control.Monad.State
 import Data.Array
 import Data.Complex
@@ -38,14 +41,29 @@ type VarName      = String
 type VarBinding   = M.Map VarName LispVal
 type Env          = IORef VarBinding
 type PtrVal       = IORef LispVal
+type Evaled       = Except LispError
 type IOEvaled     = ExceptT LispError IO
-type Evaled a     = Except LispError a
+type EnvEvaled    = ReaderT Env IOEvaled
 type LFuncName    = String
 type LFunction    = [LispVal] -> Evaled LispVal
 type LIOFunction  = [LispVal] -> IOEvaled LispVal
+type LEnvFunction = [LispVal] -> EnvEvaled LispVal
 
 
 ------- Type Definitions -------
+
+data SEnv = SEnv {
+  varBindings :: VarBinding
+, syntaxRules :: SyntaxBinding
+}
+
+type SyntaxBinding = M.Map String SyntaxRule
+
+data SyntaxRule = SyntaxRule {
+  synClosure    :: Env
+, synIdentifier :: String
+, synRules      :: [LispVal]
+}
 
 data LispVal = LAtom          String
              | LNumber        SchemeNumber
@@ -70,7 +88,8 @@ data LispVal = LAtom          String
                               }
 
              | LIOFunc        LFuncName LIOFunction
-             | LEnvFunc       LFuncName (Env -> LIOFunction)
+             -- | LEnvFunc       LFuncName (Env -> LIOFunction)
+             | LEnvFunc       LFuncName LEnvFunction
 
 data SchemeNumber = SInt      Integer
                   | SDouble   Double

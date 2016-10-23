@@ -114,10 +114,10 @@ boolBoolBinop = boolBinop unpackBool
 ------- List/Pair Operations -------
 
 car :: LFunction
-car [LList (x:xs)]         = return x
-car [LDottedList (x:xs) _] = return x
-car [badArg]               = throwError $ TypeMismatch "pair" badArg
-car badArgList             = throwError $ NumArgs 1 badArgList
+car [LList (x:_)]         = return x
+car [LDottedList (x:_) _] = return x
+car [badArg]              = throwError $ TypeMismatch "pair" badArg
+car badArgList            = throwError $ NumArgs 1 badArgList
 
 cdr :: LFunction
 cdr [LList (_:xs)]         = return $ LList xs

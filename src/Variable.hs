@@ -91,15 +91,15 @@ derefPtrVal val               = throwError $ ImmutableArg "Not pointer value" va
  -     stack
  -   - 'UnboundVar' error otherwise
  -}
-getVar :: Env -> VarName -> IOEvaled LispVal
-getVar env var = do
+getVar :: VarName -> Env -> IOEvaled LispVal
+getVar var env = do
     vars <- liftIO $ readIORef env
     fromMap notFoundErr var vars
   where notFoundErr :: LispError
         notFoundErr = bindingNotFound var
 
-getVarDeep :: Env -> VarName -> IOEvaled LispVal
-getVarDeep env var = do
+getVarDeep :: VarName -> Env -> IOEvaled LispVal
+getVarDeep var env = do
     vars    <- liftIO $ readIORef env
     lispVal <- fromMap notFoundErr var vars
     case lispVal of
@@ -109,8 +109,8 @@ getVarDeep env var = do
   where notFoundErr :: LispError
         notFoundErr = bindingNotFound var
 
-setVar :: Env -> VarName -> LispVal -> IOEvaled LispVal
-setVar env var value = do
+setVar :: VarName -> LispVal -> Env -> IOEvaled LispVal
+setVar var value env = do
     defined <- liftIO $ isBound env var
     if defined
       then liftIO $ env `modifyIORef` M.insert var value
@@ -130,8 +130,8 @@ modifyPtrVal f (LPointer ptr) = do
   return newVal
 modifyPtrVal _ val = throwError $ ImmutableArg "Modifying non-mutable value" val
 
-defineVar :: Env -> VarName -> LispVal -> IO LispVal
-defineVar env var value = env `modifyIORef` M.insert var value >> return value
+defineVar :: VarName -> LispVal -> Env -> IO LispVal
+defineVar var value env = env `modifyIORef` M.insert var value >> return value
 
 -- Updates/Mutates current environment with all of the new bindings
 mBindVars :: Env -> [(VarName, LispVal)] -> IO Env
