@@ -2,6 +2,7 @@ module Definition
   ( LispVal(..)
   , SchemeNumber(..)
   , LispError(..)
+  , SyntaxRule(..)
 
   , SVector
   , PtrName
@@ -52,6 +53,12 @@ type LEnvFunction = [LispVal] -> EnvEvaled LispVal
 
 ------- Type Definitions -------
 
+data SyntaxRule = SyntaxRule {
+  synClosure    :: Env        -- Environment of the syntax rule
+, synLiterals   :: [String]   -- List of literal identifiers reserved in the rule
+, synRules      :: [LispVal]  -- Actual rule value
+}
+
 data LispVal = LAtom          String
              | LNumber        SchemeNumber
              | LString        String
@@ -77,6 +84,8 @@ data LispVal = LAtom          String
              | LIOFunc        LFuncName LIOFunction
              | LEnvFunc       LFuncName LEnvFunction
 
+             | LSyntax        SyntaxRule
+
 data SchemeNumber = SInt      Integer
                   | SDouble   Double
                   | SRational Rational
@@ -91,6 +100,7 @@ data LispError = NumArgs        Int        [LispVal]
                | UnboundVar     String     String
                | InvalidArgs    String     [LispVal]
                | ImmutableArg   String     LispVal
+               | InvalidSyntax  String
                | Default        String
 
 
@@ -153,8 +163,9 @@ showVal (LLambdaFunc args varargs body env) =
               ++ ") ...)"
 
 
-showVal (LPointer _) = error "TODO: Trying to show pointer value!"
 showVal (LPort _)    = "<IO port>"
+showVal (LPointer _) = error "TODO: Trying to show pointer value!"
+showVal (LSyntax _)  = error "TODO: Trying to show syntax!"
 
 unwordsList :: [LispVal] -> String
 unwordsList = unwords . map showVal
@@ -345,4 +356,5 @@ showError (ParserErr      parseErr)         =
   "Parse error at " ++ show parseErr
 showError (InvalidArgs    message  args)    = message ++ ", got: " ++ show args
 showError (ImmutableArg   message  arg)     = message ++ ", got constant: " ++ show arg
+showError (InvalidSyntax  synId)            = "Cannot use syntax keyword as expression: " ++ synId
 showError (Default        message)          = "Error: " ++ message

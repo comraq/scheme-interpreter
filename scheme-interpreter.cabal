@@ -19,6 +19,7 @@ library
                      , Definition
                      , IOFunction
                      , LispVector
+                     , Macro
                      , PrimFunction
                      , Parser
                      , Unpacker

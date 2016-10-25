@@ -11,6 +11,7 @@ import Definition
 import IOFunction
 import PrimFunction
 import LispVector (vectorSet, vectorFill, vectorLength)
+import qualified Macro
 import Parser
 import Variable
 import Unpacker (unpackBoolCoerce)
@@ -21,10 +22,13 @@ type QuasiquoteCont = LispVal -> IOEvaled LispVal
 
 
 eval :: Env -> LispVal -> IOEvaled LispVal
-eval env expr = runReaderT (evalDeep expr) env >>= derefPtrValSafe
+eval env expr = runReaderT (evalMacro expr >>= evalDeep ) env >>= derefPtrValSafe
 
 evalDeep :: LispVal -> EnvEvaled LispVal
-evalDeep (LAtom var)           = liftIOEvaled $ getVarDeep var
+evalDeep (LAtom var)           = liftIOEvaled (getVarDeep var) >>= \val ->
+  case val of
+    LSyntax _ -> liftThrowErr $ InvalidSyntax var
+    _         -> return val
 evalDeep var@(LNumber _)       = return var
 evalDeep var@(LString _)       = return var
 evalDeep var@(LBool _)         = return var
@@ -47,6 +51,18 @@ evalDeep badForm               = liftThrowErr $ BadSpecialForm "Unrecognized spe
 evalOnce :: LispVal -> EnvEvaled LispVal
 evalOnce (LAtom var) = liftIOEvaled $ getVar var
 evalOnce var         = evalDeep var
+
+evalMacro :: LispVal -> EnvEvaled LispVal
+evalMacro lispval@(LList vs) = case vs of
+    LAtom var:vals -> liftIOEvaled (liftIO . isBound var) >>=
+      \bound -> if bound
+                  then liftIOEvaled (getVar var) >>= evalIfMacro
+                  else return lispval
+  where evalIfMacro :: LispVal -> EnvEvaled LispVal
+        evalIfMacro (LSyntax srule) = undefined -- TODO
+        evalIfMacro _               = return lispval
+evalMacro lispval = return lispval
+
 
 evalQuasiquote :: LispVal -> EnvEvaled LispVal
 evalQuasiquote lispval = case lispval of
@@ -192,6 +208,9 @@ envFunctions =
 
   , ("eq?"  , eqv )
   , ("eqv?" , eqv )
+
+  -- Macro Expansions
+  , ("define-syntax" , defineSyntax )
   ]
 
 define :: LEnvFunction
@@ -367,6 +386,9 @@ eqv [arg1, arg2] = do
   return . LBool $ a == b
 eqv args         = liftThrowErr $ NumArgs 2 args
 
+
+defineSyntax :: LEnvFunction
+defineSyntax = liftIOEvaled . Macro.defineSyntax
 
 ------- Utility Functions -------
 
