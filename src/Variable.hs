@@ -68,8 +68,8 @@ runIOEvaledSafe = runIOEvaled undefined id . trapError
     showLispErrorSafe e                        = return $ show e
 
 -- Check if a variable has a binding in the environment
-isBound :: Env -> VarName -> IO Bool
-isBound env var = M.member var <$> readIORef env
+isBound :: VarName -> Env -> IO Bool
+isBound var env = M.member var <$> readIORef env
 
 derefPtrValSafe :: LispVal -> IOEvaled LispVal
 derefPtrValSafe val@(LPointer _)    = derefPtrVal val >>= derefPtrValSafe
@@ -111,7 +111,7 @@ getVarDeep var env = do
 
 setVar :: VarName -> LispVal -> Env -> IOEvaled LispVal
 setVar var value env = do
-    defined <- liftIO $ isBound env var
+    defined <- liftIO $ isBound var env
     if defined
       then liftIO $ env `modifyIORef` M.insert var value
       else throwError undefinedErr

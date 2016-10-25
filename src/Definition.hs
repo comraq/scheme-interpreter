@@ -52,19 +52,6 @@ type LEnvFunction = [LispVal] -> EnvEvaled LispVal
 
 ------- Type Definitions -------
 
-data SEnv = SEnv {
-  varBindings :: VarBinding
-, syntaxRules :: SyntaxBinding
-}
-
-type SyntaxBinding = M.Map String SyntaxRule
-
-data SyntaxRule = SyntaxRule {
-  synClosure    :: Env
-, synIdentifier :: String
-, synRules      :: [LispVal]
-}
-
 data LispVal = LAtom          String
              | LNumber        SchemeNumber
              | LString        String
@@ -88,7 +75,6 @@ data LispVal = LAtom          String
                               }
 
              | LIOFunc        LFuncName LIOFunction
-             -- | LEnvFunc       LFuncName (Env -> LIOFunction)
              | LEnvFunc       LFuncName LEnvFunction
 
 data SchemeNumber = SInt      Integer

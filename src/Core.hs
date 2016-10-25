@@ -122,7 +122,8 @@ apply (LLambdaFunc params varargs body closure) args
   | otherwise                                   =
       -- Binds param names and function args to lambda closure env,
       -- then lift the IO results back to the monad transformers stack
-      (liftIO . bindVars closure $ zip params args)
+      zip params <$> mapM derefPtrValSafe args
+      >>= liftIO . bindVars closure
 
       -- Bind the optional 'varargs' is applicable
       >>= bindVarArgs varargs
