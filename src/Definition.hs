@@ -2,7 +2,7 @@ module Definition
   ( LispVal(..)
   , SchemeNumber(..)
   , LispError(..)
-  , SyntaxRule(..)
+  , SyntaxDef(..)
 
   , SVector
   , PtrName
@@ -19,6 +19,8 @@ module Definition
 
   , LIOFunction
   , LEnvFunction
+
+  , SyntaxRule
   ) where
 
 import Control.Arrow
@@ -50,13 +52,14 @@ type LFunction    = [LispVal] -> Evaled LispVal
 type LIOFunction  = [LispVal] -> IOEvaled LispVal
 type LEnvFunction = [LispVal] -> EnvEvaled LispVal
 
+type SyntaxRule   = (LispVal, LispVal)
 
 ------- Type Definitions -------
 
-data SyntaxRule = SyntaxRule {
+data SyntaxDef = SyntaxDef {
   synClosure    :: Env        -- Environment of the syntax rule
 , synLiterals   :: [String]   -- List of literal identifiers reserved in the rule
-, synRules      :: [LispVal]  -- Actual rule value
+, synRules      :: [SyntaxRule]  -- Actual rule value
 }
 
 data LispVal = LAtom          String
@@ -84,7 +87,7 @@ data LispVal = LAtom          String
              | LIOFunc        LFuncName LIOFunction
              | LEnvFunc       LFuncName LEnvFunction
 
-             | LSyntax        SyntaxRule
+             | LSyntax        SyntaxDef
 
 data SchemeNumber = SInt      Integer
                   | SDouble   Double

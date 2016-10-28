@@ -22,7 +22,7 @@ type QuasiquoteCont = LispVal -> IOEvaled LispVal
 
 
 eval :: Env -> LispVal -> IOEvaled LispVal
-eval env expr = runReaderT (evalMacro expr >>= evalDeep ) env >>= derefPtrValSafe
+eval env expr = Macro.expandMacro expr env >>= (`runReaderT` env) . evalDeep >>= derefPtrValSafe
 
 evalDeep :: LispVal -> EnvEvaled LispVal
 evalDeep (LAtom var)           = liftIOEvaled (getVarDeep var) >>= \val ->
@@ -45,24 +45,12 @@ evalDeep val@(LList lvs)       = case lvs of
   (func : args) -> callFunc func args
 
 evalDeep var@(LDottedList _ _) = liftThrowErr $ BadSpecialForm "Literal dotted lists must be quoted!" var
-evalDeep var@(LVector _)       = liftThrowErr $ BadSpecialForm "Literal vectors must be quoted!" var
+evalDeep var@(LVector _)       = return var
 evalDeep badForm               = liftThrowErr $ BadSpecialForm "Unrecognized special form" badForm
 
 evalOnce :: LispVal -> EnvEvaled LispVal
 evalOnce (LAtom var) = liftIOEvaled $ getVar var
 evalOnce var         = evalDeep var
-
-evalMacro :: LispVal -> EnvEvaled LispVal
-evalMacro lispval@(LList vs) = case vs of
-    LAtom var:vals -> liftIOEvaled (liftIO . isBound var) >>=
-      \bound -> if bound
-                  then liftIOEvaled (getVar var) >>= evalIfMacro
-                  else return lispval
-  where evalIfMacro :: LispVal -> EnvEvaled LispVal
-        evalIfMacro (LSyntax srule) = undefined -- TODO
-        evalIfMacro _               = return lispval
-evalMacro lispval = return lispval
-
 
 evalQuasiquote :: LispVal -> EnvEvaled LispVal
 evalQuasiquote lispval = case lispval of
@@ -210,7 +198,7 @@ envFunctions =
   , ("eqv?" , eqv )
 
   -- Macro Expansions
-  , ("define-syntax" , defineSyntax )
+  , ("define-syntax"      , liftIOEvaled . Macro.defineSyntax     )
   ]
 
 define :: LEnvFunction
@@ -386,9 +374,6 @@ eqv [arg1, arg2] = do
   return . LBool $ a == b
 eqv args         = liftThrowErr $ NumArgs 2 args
 
-
-defineSyntax :: LEnvFunction
-defineSyntax = liftIOEvaled . Macro.defineSyntax
 
 ------- Utility Functions -------
 
