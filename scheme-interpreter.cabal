@@ -30,6 +30,7 @@ library
                      , haskeline
                      , mtl
                      , parsec
+                     , transformers
   default-language:    Haskell2010
 
 executable scheme-interpreter-exe
