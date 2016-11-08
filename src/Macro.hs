@@ -105,7 +105,10 @@ matchPattern val env literals (pat, template) = do
 
     matchPat (LList vs,         LDottedList ps p)
       | length vs < length ps = Nothing
-      | otherwise             = fmap join . traverse matchPat $ zip vs ps
+      | otherwise             =
+          let (vs', vals) = splitAt (length ps) vs
+          in  (++) <$> matchPat (LList vals, p)
+                   <*> fmap join (traverse matchPat $ zip vs' ps)
 
     matchPat (LDottedList vs v, LDottedList ps p)
       | length vs /= length ps = Nothing

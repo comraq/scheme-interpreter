@@ -57,8 +57,8 @@ type SyntaxRule   = (LispVal, LispVal)
 ------- Type Definitions -------
 
 data SyntaxDef = SyntaxDef {
-  synClosure    :: Env        -- Environment of the syntax rule
-, synLiterals   :: [String]   -- List of literal identifiers reserved in the rule
+  synClosure    :: Env           -- Environment of the syntax rule; TODO: unecessary?
+, synLiterals   :: [String]      -- List of literal identifiers reserved in the rule
 , synRules      :: [SyntaxRule]  -- Actual rule value
 }
 
