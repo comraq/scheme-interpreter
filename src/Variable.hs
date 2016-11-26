@@ -24,6 +24,7 @@ module Variable
   , toPtrVal
 
   , isBound
+  , getBindings
   ) where
 
 import Control.Monad.Except
@@ -109,6 +110,9 @@ getVarDeep var env = do
   where notFoundErr :: LispError
         notFoundErr = bindingNotFound var
 
+getBindings :: Env -> IO VarBinding
+getBindings = readIORef
+
 setVar :: VarName -> LispVal -> Env -> IOEvaled LispVal
 setVar var value env = do
     defined <- liftIO $ isBound var env
@@ -137,7 +141,7 @@ defineVar var value env = env `modifyIORef` M.insert var value >> return value
 mBindVars :: Env -> [(VarName, LispVal)] -> IO Env
 mBindVars env bindings = modifyIORef env (extendEnv bindings) >> return env
 
-extendEnv :: [(VarName, LispVal)] -> M.Map VarName LispVal -> M.Map VarName LispVal
+extendEnv :: [(VarName, LispVal)] -> VarBinding -> VarBinding
 extendEnv bindings envMap = foldr addToMap envMap bindings
   where addToMap :: Ord k => (k, v) -> M.Map k v -> M.Map k v
         addToMap = uncurry M.insert

@@ -8,7 +8,6 @@ module LispVector
   , vectorFill
   ) where
 
-import Data.Array.IO
 import Data.Array.IArray
 
 import Definition
