@@ -16,15 +16,21 @@ import LispVector (vectorLength, vectorToList, vector)
 import Variable
 
 
+-- Note: Syntax Id is stripped away from inForm before passing to matchPattern
 expandMacro :: LispVal -> Env -> IOEvaled LispVal
-expandMacro lispval@(LList (LAtom var:vals)) env =
-    liftIO (isBound var env) >>= \bound ->
-      if bound
-        then getVar var env >>= expandIfMacro (LList vals)
-        else return lispval
+expandMacro lispval env = case lispval of
+    LList (LAtom mId:vals)           -> expandIfMacro mId $ LList vals
+    LDottedList (LAtom mId:vals) val -> expandIfMacro mId $ LDottedList vals val
+    _                                -> return lispval
   where
-    expandIfMacro :: LispVal -> LispVal -> IOEvaled LispVal
-    expandIfMacro inForm (LSyntax (SyntaxDef _ literals rules)) =
+    expandIfMacro :: VarName -> LispVal -> IOEvaled LispVal
+    expandIfMacro var val = liftIO (isBound var env) >>= \bound ->
+      if bound
+        then getVar var env >>= expand val
+        else return lispval
+
+    expand :: LispVal -> LispVal -> IOEvaled LispVal
+    expand inForm (LSyntax (SyntaxDef _ literals rules)) =
         runMaybeT (matchFirst inForm rules) >>=
         maybe (throwError $ invalidSyntax lispval) return
       where
@@ -32,8 +38,7 @@ expandMacro lispval@(LList (LAtom var:vals)) env =
         matchFirst val (r:rs) = matchPattern val env literals r `mplus` matchFirst val rs
         matchFirst _   _      = mzero
 
-    expandIfMacro _ _ = return lispval
-expandMacro val _ = return val
+    expand _ _ = return lispval
 
 invalidSyntax :: LispVal -> LispError
 invalidSyntax = BadSpecialForm "Invalid syntax"
@@ -115,12 +120,33 @@ makeSyntaxEnv val env literals (pat, template) = do
         in  put (LList vs) >> matchPat' (LList ps)
       _           -> lift Nothing
 
-    -- TODO: Add cases for dotted lists where input is dotted list or input
-    --       is list with remaining vals captured in the last pat of dotted list
-    matchPat' _ = undefined
+    matchPat' (LDottedList pats pat) = get >>= \inF -> case (inF, pats) of
+      (LList [], p:_) -> lift Nothing
+      (LList _ , [])  -> matchPat' pat
+
+      (_, p:LAtom "...":ps) -> do
+        put inF
+        bindings <- matchEllipsis p
+        mappend bindings <$> matchPat' (LDottedList ps pat)
+
+      (LList (v:vs), p:ps) -> do
+        bindings <- lift $ evalStateT (matchPat' p) v
+        put $ LList vs
+        mappend bindings <$> matchPat' (LDottedList ps pat)
+
+      (LDottedList xs x, _) -> do
+        bindings <- lift $ evalStateT (matchPat' $ LList pats) $ LList xs
+        put x
+        mappend bindings <$> matchPat' pat
+
+      _ -> lift Nothing
+
+    -- TODO: Add cases for any other type of pattern lispval
+    --       - are any other patterns valid?
+    matchPat' _ = lift Nothing
 
     matchEllipsis :: PatLispVal -> StateT InputLispVal Maybe Bindings
-    -- TODO: Move 'validateInputVal' to the end of match
+    -- TODO: Consider moving 'validateInputVal' to the end of match
     --       ie: if bindings is empty list, return Nothing
     matchEllipsis pat = get >>= validateInputVal >> matchE
       where
@@ -137,12 +163,11 @@ makeSyntaxEnv val env literals (pat, template) = do
               bindings <- matchE
               let eBinding = ellipsis <$> binding
               return $ M.unionWith consBindings eBinding bindings
-            -- TODO: should be 'return $ matchEllipsisEmpty pat'?
-            _            -> return M.empty
+            _            -> return $ matchEllipsisEmpty pat
 
           LList _ -> return $ matchEllipsisEmpty pat
 
-          -- TODO: Support Ellipsis match with dotted list patterns
+          -- TODO: Support Ellipsis match with dotted list input
           LDottedList invs lastInv -> undefined
           _ -> undefined
 
@@ -183,11 +208,11 @@ matchPattern val env literals (pat, template) = do
      -       - reverse template if list so that '...' is traversed before
      -         the actual identifier
      -       - after recursion, fmap over the results to 'spread/flatten' the list
+     -       - this may ease expansion of nestsed ellipsis
      -}
     lift $ evalStateT (transformTemplate' senv) template
 
   where
-    -- TODO: Iterate over input form to expand ellipsis if necessary
     transformTemplate' :: SyntaxEnv -> StateT TemplateLispVal IOEvaled LispVal
     transformTemplate' (bindings, renames) = go
       where
@@ -218,77 +243,6 @@ matchPattern val env literals (pat, template) = do
             (\(LList vs) -> LList $ v:vs) <$> go
 
           _ -> return inF
-
-  {-
-    bindMacroEnv :: [(VarName, LispVal)] -> IO (Env, [(VarName, VarName)])
-    bindMacroEnv = foldrM (\(name, val) (env, renames) -> do
-      bound <- isBound name env
-      if bound
-        then let newname = '0':name
-             in (, (name, newname):renames) <$> (env `bindVars` [(newname, val)])
-        else (, renames) <$> (env `bindVars` [(name, val)]))
-      (env, [])
-
-    matchPat :: (LispVal, LispVal) -> Maybe [(VarName, LispVal)]
-    matchPat (inF, LAtom lit)
-        -- pattern expects syntax literal
-      | lit `elem` literals = case inF of
-          LAtom a | a == lit  -> return []
-                  | otherwise -> Nothing
-          _ -> Nothing
-        -- bind pattern as binding for value in environment
-      | otherwise           = return [(lit, inF)]
-
-    matchPat (LList vs,         LList ps)
-      | length vs /= length ps = Nothing
-      | otherwise              = fmap join . traverse matchPat $ zip vs ps
-
-    matchPat (LList vs,         LDottedList ps p)
-      | length vs < length ps = Nothing
-      | otherwise             =
-          let (vs', vals) = splitAt (length ps) vs
-          in  (++) <$> matchPat (LList vals, p)
-                   <*> fmap join (traverse matchPat $ zip vs' ps)
-
-    matchPat (LDottedList vs v, LDottedList ps p)
-      | length vs /= length ps = Nothing
-      | otherwise              = (++) <$> matchPat (v, p)
-                                      <*> fmap join (traverse matchPat $ zip vs ps)
-
-    matchPat (LVector vec,      LVector pVec)
-      | vectorLength vec /= vectorLength pVec = Nothing
-      | otherwise                             =
-            fmap join . traverse matchPat
-          $ zip (vectorToList vec) (vectorToList pVec)
-
-    matchPat _ = Nothing
-
-    dropSynId :: LispVal -> Maybe LispVal
-    dropSynId (LList (_:ps))         = Just $ LList ps
-    dropSynId (LDottedList (_:ps) p) = Just $ LDottedList ps p
-    dropSynId _                      = Nothing
-
-    transformTemplate :: SyntaxEnv -> TemplateLispVal -> IOEvaled LispVal
-    transformTemplate (env, renames, ellipsis) var@(LAtom lit) = case lookup lit renames of
-      Just newname -> getVar newname env
-      _            -> do
-        bound <- liftIO $ isBound lit env
-        if bound
-          then getVar lit env
-          else return var
-
-    transformTemplate senv (LList vals) =
-      LList <$> traverse (transformTemplate senv) vals
-
-    transformTemplate senv (LDottedList vals val) =
-      LDottedList <$> traverse (transformTemplate senv) vals
-                  <*> transformTemplate senv val
-
-    transformTemplate senv (LVector vec) =
-      LVector <$> traverse (transformTemplate senv) vec
-
-    transformTemplate _ template = return template
-    -}
 
 liftMaybe :: Monad m => Maybe a -> MaybeT m a
 liftMaybe = MaybeT . return
