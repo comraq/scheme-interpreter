@@ -20,6 +20,8 @@ module Definition
   , LIOFunction
   , LEnvFunction
 
+  , PatLispVal
+  , TemplateLispVal
   , SyntaxRule
   ) where
 
@@ -52,7 +54,11 @@ type LFunction    = [LispVal] -> Evaled LispVal
 type LIOFunction  = [LispVal] -> IOEvaled LispVal
 type LEnvFunction = [LispVal] -> EnvEvaled LispVal
 
-type SyntaxRule   = (LispVal, LispVal)
+type PatLispVal      = LispVal
+type TemplateLispVal = LispVal
+
+-- TODO: Add pattern contains ellipsis flag per syntax rule
+type SyntaxRule      = (PatLispVal, TemplateLispVal)
 
 ------- Type Definitions -------
 

@@ -72,9 +72,7 @@ validateRule val@(LList [pat, expr]) = case pat of
         badSyntaxErr = BadSpecialForm "Invalid 'syntax-rules'" val
 validateRule val = throwError $ BadSpecialForm "Invalid 'syntax-rules'" val
 
-type PatLispVal      = LispVal
-type InputLispVal    = LispVal
-type TemplateLispVal = LispVal
+type InputLispVal = LispVal
 
 type Renames   = [(VarName, VarName)]
 type Bindings  = M.Map VarName LispVal
@@ -102,7 +100,6 @@ makeSyntaxEnv val env literals (pat, template) = do
     matchPat' (LList pats) = get >>= \inF -> case (inF, pats) of
       (LList [], [])        -> return mempty
       (_, p:LAtom "...":ps) -> do
-        put inF
         bindings <- matchEllipsis p
         mappend bindings <$> matchPat' (LList ps)
 
@@ -121,23 +118,36 @@ makeSyntaxEnv val env literals (pat, template) = do
       _           -> lift Nothing
 
     matchPat' (LDottedList pats pat) = get >>= \inF -> case (inF, pats) of
-      (LList [], p:_) -> lift Nothing
-      (LList _ , [])  -> matchPat' pat
+      ------- "InF" matches 'LList' -------
 
-      (_, p:LAtom "...":ps) -> do
-        put inF
-        bindings <- matchEllipsis p
-        mappend bindings <$> matchPat' (LDottedList ps pat)
+      -- length of input list < head length of pat dotted list
+      (LList []        , _:_) -> lift Nothing
 
+      -- length of input list > head length of pat dotted list
+      (LList _         , [] ) -> matchPat' pat
+
+      -- input list `match` head of pat dotted list
       (LList (v:vs), p:ps) -> do
         bindings <- lift $ evalStateT (matchPat' p) v
         put $ LList vs
         mappend bindings <$> matchPat' (LDottedList ps pat)
 
-      (LDottedList xs x, _) -> do
-        bindings <- lift $ evalStateT (matchPat' $ LList pats) $ LList xs
-        put x
-        mappend bindings <$> matchPat' pat
+
+      ------- "InF" matches 'LDottedList' -------
+
+      -- head length of input dotted list == head length of pat dotted list
+      (LDottedList [] v, [] ) -> put v >> matchPat' pat
+
+      -- head of input dotted list `match` ellipsis in head of pat dotted list
+      (LDottedList _ _, p:LAtom "...":ps) -> do
+        bindings <- matchEllipsis p
+        mappend bindings <$> matchPat' (LDottedList ps pat)
+
+      -- head of input dotted list `match` head of pat dotted list
+      (LDottedList (v:vs) val, p:ps) -> do
+        bindings <- lift $ evalStateT (matchPat' p) v
+        put $ LDottedList vs val
+        mappend bindings <$> matchPat' (LDottedList ps pat)
 
       _ -> lift Nothing
 
@@ -167,9 +177,10 @@ makeSyntaxEnv val env literals (pat, template) = do
 
           LList _ -> return $ matchEllipsisEmpty pat
 
-          -- TODO: Support Ellipsis match with dotted list input
-          LDottedList invs lastInv -> undefined
-          _ -> undefined
+          LDottedList vs val -> case runStateT matchE $ LList vs of
+            Just (binding, LList vs') -> put (LDottedList vs' val)
+                                      >> return binding
+            _ -> return $ matchEllipsisEmpty pat
 
     consBindings :: LispVal -> LispVal -> LispVal
     consBindings (LList [LAtom ".", v]) (LList (LAtom ".":vs)) = LList $ LAtom ".":v:vs
@@ -181,6 +192,7 @@ makeSyntaxEnv val env literals (pat, template) = do
 
 -- TODO: Implement matching ellipsis pattern with empty input vals
 --       - support dotted list ellipsis patterns and cover remaining cases
+--         ie: undefined case valid?
 matchEllipsisEmpty :: PatLispVal -> Bindings
 matchEllipsisEmpty (LAtom p)  = M.singleton p emptyEllipsis
 matchEllipsisEmpty (LList ps) = foldMap matchEllipsisEmpty ps
@@ -204,11 +216,14 @@ matchPattern val env literals (pat, template) = do
     let maybeSyntaxEnv = liftIO . runMaybeT $ makeSyntaxEnv val env literals (pat, template)
     senv <- MaybeT maybeSyntaxEnv
     {-
-     - TODO: Reverse template then call tranformTemplate?
+     - TODO: Reverse template then call transformTemplate?
      -       - reverse template if list so that '...' is traversed before
      -         the actual identifier
      -       - after recursion, fmap over the results to 'spread/flatten' the list
      -       - this may ease expansion of nestsed ellipsis
+     -       - also can simplify matching process from "temp/macrotest.scm -  ex3, ex4"
+     -       - Consider 'paramorphism' recursion scheme
+               - in the ex4 case, add pattern contains ellipsis flag
      -}
     lift $ evalStateT (transformTemplate' senv) template
 

@@ -232,10 +232,13 @@ parseList :: Parser LispVal
 parseList = LList <$> parseExpr `sepEndBy` whiteSpace
 
 parseDottedList :: Parser LispVal
-parseDottedList =
-  let hd = parseExpr `endBy` whiteSpace
-      tl = dot >> parseExpr
-  in  LDottedList <$> hd <*> tl
+parseDottedList = do
+  vals <- parseExpr `endBy` whiteSpace
+  val  <- dot >> parseExpr
+  return $ case val of
+    LList vs -> LList $ vals ++ vs
+    _        -> LDottedList vals val
+
 
 
 ------- Vector Parser -------
