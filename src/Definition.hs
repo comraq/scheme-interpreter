@@ -38,6 +38,51 @@ import System.IO
 import Text.Parsec.Error
 
 
+------- Parametrized -------
+
+type EnvF a       = IORef (M.Map VarName a)
+type EnvEvaledF a = ReaderT (EnvF a) IOEvaled a
+
+data SyntaxRuleF a = SyntaxRuleF {
+  srPattern  :: a
+, srTemplate :: a
+, srEllipsis :: Bool
+}
+
+data SyntaxDefF a = SyntaxDefF {
+  synClosureF    :: EnvF a        -- Environment of the syntax rule; TODO: unecessary?
+, synLiteralsF   :: [String]      -- List of literal identifiers reserved in the rule
+, synRulesF      :: [SyntaxRuleF a]  -- Actual rule value
+}
+
+data LispValF a = LAtomF          String
+                | LNumberF        SchemeNumber
+                | LStringF        String
+                | LBoolF          Bool
+                | LCharF          Char
+
+                | LListF          [a]
+                | LDottedListF    [a] a
+                | LVectorF        (SVector a)
+
+                | LPointerF       (IORef a)
+                | LPortF          Handle
+
+                | LPrimitiveFuncF LFuncName ([a] -> Evaled a)
+
+                -- Constructor for user defined functions
+                | LLambdaFuncF    { paramsF  :: [String]     -- parameter names
+                                  , varargF  :: Maybe String -- variable name of the variable-length list of arguments
+                                  , bodyF    :: [a]          -- function body, a list of expressions
+                                  , closureF :: EnvF a       -- the environment which the function encloses over
+                                  }
+
+                | LIOFuncF        LFuncName ([a] -> IOEvaled a)
+                | LEnvFuncF       LFuncName ([a] -> EnvEvaledF a)
+
+                | LSyntaxF        (SyntaxDefF a)
+
+
 ------- Type Synonyms ------
 
 type SVector      = Array Int
@@ -59,6 +104,7 @@ type TemplateLispVal = LispVal
 
 -- TODO: Add pattern contains ellipsis flag per syntax rule
 type SyntaxRule      = (PatLispVal, TemplateLispVal)
+
 
 ------- Type Definitions -------
 

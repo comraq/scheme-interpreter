@@ -1,7 +1,7 @@
 module Main where
 
 import Control.Arrow
-import Control.Monad (unless, void)
+import Control.Monad (unless)
 import Control.Monad.Trans (liftIO)
 import Data.Maybe (fromMaybe)
 import System.Console.Haskeline
@@ -67,7 +67,7 @@ evalInputT :: Env -> String -> InputT IO String
 evalInputT env = liftIO . evalInputIO env
 
 evalAndPrint :: Env -> String -> InputT IO ()
-evalAndPrint env ""  = return ()
+evalAndPrint _   ""  = return ()
 evalAndPrint env str = evalInputT env str >>= outputStrLn
 
 until_ :: Monad m => (a -> Bool) -> m a -> (a -> m ()) -> m ()
